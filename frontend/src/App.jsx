@@ -1,29 +1,162 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, User, Eye, Search, Plus, MessageSquare, Megaphone, Globe, Wrench, ChevronLeft, Phone, Video, MoreVertical, Paperclip, Smile, Send, Info, Check, Copy, Settings, Menu } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Shield, Lock, User, Eye, EyeOff, Search, Plus, MessageSquare, ChevronLeft, Phone, Video, MoreVertical, Paperclip, Smile, Send, Info, Check, CheckCheck, Copy, Settings, Menu, AlertTriangle, X } from 'lucide-react';
 import { generateKeyPair, exportPublicKey, encryptMessage } from './utils/crypto';
+import { isSupabaseConfigured, signInUser, signUpUser, getCurrentUser, fetchUserRooms, fetchRoomMessages, sendEncryptedMessage, subscribeToMessages, updateProfile, searchProfiles, createRoom } from './lib/supabaseQueries';
 
 const initialChats = {};
 
 function App() {
+  const [currentUser, setCurrentUser] = useState(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState('');
-  const [activeTab, setActiveTab] = useState('raw'); // 'readable' or 'raw'
+  const [activeTab, setActiveTab] = useState('raw');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [chats, setChats] = useState(initialChats);
+  const [chats, setChats] = useState({});
   const [activeChatId, setActiveChatId] = useState(null);
   const [input, setInput] = useState('');
   const [keys, setKeys] = useState(null);
+  const [cryptoError, setCryptoError] = useState(false);
   const [lastEncrypted, setLastEncrypted] = useState("");
+  const [toast, setToast] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Check auth session on load
+  useEffect(() => {
+    async function checkAuth() {
+      if (!isSupabaseConfigured()) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const user = await getCurrentUser();
+        if (user) {
+          setCurrentUser(user);
+          setUsername(user.email ? user.email.split('@')[0] : 'User');
+          setIsLoggedIn(true);
+        }
+      } catch (err) {
+        console.error("Auth check failed:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    checkAuth();
+  }, []);
+
+  // Fetch rooms when logged in
+  useEffect(() => {
+    if (!isLoggedIn || !isSupabaseConfigured()) return;
+
+    async function loadRooms() {
+      try {
+        const dbRooms = await fetchUserRooms();
+        const chatMap = {};
+        dbRooms.forEach(room => {
+          chatMap[room.id] = {
+            id: room.id,
+            name: room.name || 'Direct Message',
+            type: room.type,
+            messages: [],
+            participants: room.participants ? room.participants.map(p => ({
+              id: p.user?.id,
+              name: p.user?.username || 'User',
+              avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${p.user?.username || 'user'}`
+            })) : []
+          };
+        });
+        setChats(chatMap);
+        if (dbRooms.length > 0 && !activeChatId) {
+          setActiveChatId(dbRooms[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to load rooms:", err);
+      }
+    }
+    loadRooms();
+  }, [isLoggedIn]);
+
+  // Fetch messages and subscribe to realtime for active chat
+  useEffect(() => {
+    if (!activeChatId || !isSupabaseConfigured()) return;
+
+    let subscription = null;
+    async function loadMessages() {
+      try {
+        const msgs = await fetchRoomMessages(activeChatId);
+        const formatted = msgs.map(m => ({
+          id: m.id,
+          text: m.encrypted_content, // default payload
+          encrypted: m.encrypted_content,
+          time: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          type: m.sender?.username === username ? 'sent' : 'received',
+          sender: m.sender?.username || 'User'
+        }));
+
+        setChats(prev => ({
+          ...prev,
+          [activeChatId]: {
+            ...prev[activeChatId],
+            messages: formatted
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to load messages:", err);
+      }
+
+      try {
+        subscription = subscribeToMessages(activeChatId, (newMsg) => {
+          setChats(prev => {
+            if (!prev[activeChatId]) return prev;
+            const msgObj = {
+              id: newMsg.id,
+              text: newMsg.encrypted_content,
+              encrypted: newMsg.encrypted_content,
+              time: new Date(newMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              type: 'received',
+              sender: 'Peer'
+            };
+            return {
+              ...prev,
+              [activeChatId]: {
+                ...prev[activeChatId],
+                messages: [...(prev[activeChatId].messages || []), msgObj]
+              }
+            };
+          });
+        });
+      } catch (err) {
+        console.error("Subscription error:", err);
+      }
+    }
+
+    loadMessages();
+
+    return () => {
+      if (subscription && subscription.unsubscribe) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [activeChatId]);
   
   const scrollRef = useRef(null);
+
+  // Toast helper
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
 
   useEffect(() => {
     async function initCrypto() {
       try {
+        if (!window.crypto?.subtle) {
+          throw new Error('Web Crypto API is not available in this browser.');
+        }
         const keyPair = await generateKeyPair();
         setKeys(keyPair);
       } catch (err) {
         console.error("Crypto Init Failed:", err);
+        setCryptoError(true);
       }
     }
     initCrypto();
@@ -41,7 +174,7 @@ function App() {
 
   const handleSend = async (e) => {
     if (e) e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || !activeChatId) return;
 
     const messageText = input;
     setInput('');
@@ -51,10 +184,11 @@ function App() {
       if (keys) {
         encryptedPayload = await encryptMessage(keys.publicKey, messageText);
       } else {
-        encryptedPayload = btoa(messageText);
+        encryptedPayload = btoa(unescape(encodeURIComponent(messageText)));
       }
     } catch(err) {
-       encryptedPayload = btoa(messageText);
+      console.error('Encryption failed:', err);
+      encryptedPayload = btoa(unescape(encodeURIComponent(messageText)));
     }
     
     setLastEncrypted(encryptedPayload);
@@ -67,28 +201,94 @@ function App() {
       encrypted: encryptedPayload
     };
 
-    setChats(prev => ({
-      ...prev,
-      [activeChatId]: {
-        ...prev[activeChatId],
-        messages: [...prev[activeChatId].messages, newMessage]
+    // Save to Supabase if configured
+    if (isSupabaseConfigured()) {
+      try {
+        await sendEncryptedMessage(activeChatId, encryptedPayload);
+      } catch (err) {
+        console.error("Failed to send message to Supabase:", err);
+        showToast("Failed to save to database: " + err.message, "error");
       }
-    }));
+    }
+
+    setChats(prev => {
+      if (!prev[activeChatId]) return prev;
+      return {
+        ...prev,
+        [activeChatId]: {
+          ...prev[activeChatId],
+          messages: [...(prev[activeChatId].messages || []), newMessage]
+        }
+      };
+    });
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(lastEncrypted);
-    alert('Encrypted text copied to clipboard!');
+  const copyToClipboard = async () => {
+    if (!lastEncrypted) {
+      showToast('Nothing to copy yet — send a message first.', 'error');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(lastEncrypted);
+      showToast('Encrypted text copied to clipboard!');
+    } catch (err) {
+      console.error('Clipboard write failed:', err);
+      showToast('Failed to copy — please copy manually.', 'error');
+    }
   };
 
-  const activeChat = chats[activeChatId];
+  // Safely resolve activeChat — activeChatId might point to a stale/deleted chat
+  const activeChat = activeChatId ? (chats[activeChatId] || null) : null;
 
   if (!isLoggedIn) {
     return <LoginScreen onLogin={handleLogin} />
   }
 
+  if (cryptoError) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+        <div className="bg-white border border-red-100 rounded-3xl shadow-xl p-10 max-w-sm w-full text-center">
+          <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center mx-auto mb-5">
+            <AlertTriangle className="w-8 h-8 text-red-500" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Encryption Unavailable</h2>
+          <p className="text-sm text-slate-500 mb-6">
+            Your browser does not support the Web Crypto API required for end-to-end encryption.
+            Please use a modern browser (Chrome, Firefox, Edge, Safari) over HTTPS.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-blue-500 text-white font-bold text-sm hover:opacity-90 transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
+    <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden" role="application">
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          role="alert"
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-5 py-3 rounded-2xl shadow-xl text-sm font-medium transition-all animate-fade-in-down ${
+            toast.type === 'error'
+              ? 'bg-red-500 text-white'
+              : 'bg-slate-800 text-white'
+          }`}
+        >
+          {toast.type === 'error'
+            ? <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            : <Check className="w-4 h-4 flex-shrink-0" />
+          }
+          {toast.message}
+          <button onClick={() => setToast(null)} className="ml-2 opacity-70 hover:opacity-100">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       {/* Mobile Menu Overlay */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setIsMobileMenuOpen(false)} />
@@ -205,7 +405,7 @@ function App() {
                    )}
                    {activeChat.type === 'room' && (
                      <span className="text-xs text-slate-500">
-                       {activeChat.participants.length} members
+                       {(activeChat.participants || []).length} members
                      </span>
                    )}
                  </div>
@@ -277,7 +477,7 @@ function App() {
                          {displayText}
                        </div>
                        <span className={`text-[10px] text-slate-400 mt-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
-                         {msg.time} {isSent && '✓✓'}
+                         {msg.time} {isSent && <CheckCheck className="w-3 h-3 text-blue-400" />}
                        </span>
                      </div>
                    </div>
@@ -397,7 +597,7 @@ function App() {
 
                 {/* Participants */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                   <div className="text-[10px] font-bold text-slate-400 mb-4 tracking-wider">PARTICIPANTS ({activeChat.participants.length})</div>
+                   <div className="text-[10px] font-bold text-slate-400 mb-4 tracking-wider">PARTICIPANTS ({(activeChat.participants || []).length})</div>
                    <div className="space-y-4">
                      {activeChat.participants.map(p => (
                        <Participant key={p.id} avatar={p.avatar} name={p.name} status={p.status} online={p.online} />
@@ -490,8 +690,52 @@ function Participant({ avatar, name, status, online }) {
 }
 
 function LoginScreen({ onLogin }) {
-  const [user, setUser] = useState('');
-  
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+
+    if (!email.trim() || !email.includes('@')) {
+      setLoginError('Please enter a valid email address.');
+      return;
+    }
+    if (password.length < 6) {
+      setLoginError('Password must be at least 6 characters.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (isSupabaseConfigured()) {
+        if (isSignUp) {
+          const res = await signUpUser(email.trim(), password);
+          if (res.user) {
+            onLogin(email.split('@')[0]);
+          }
+        } else {
+          const res = await signInUser(email.trim(), password);
+          if (res.user) {
+            onLogin(email.split('@')[0]);
+          }
+        }
+      } else {
+        // Fallback for UI preview if env is not configured yet
+        onLogin(email.split('@')[0]);
+      }
+    } catch (err) {
+      console.error("Auth error:", err);
+      setLoginError(err.message || "Authentication failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white flex font-sans relative overflow-hidden">
       {/* Background decorations for login */}
@@ -523,14 +767,14 @@ function LoginScreen({ onLogin }) {
              <p className="text-sm text-slate-500 mt-1">Sign in to continue</p>
            </div>
 
-           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); onLogin(user); }}>
+           <form className="space-y-4" onSubmit={handleSubmit}>
              <div className="relative">
                <User className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                <input 
                  type="text" 
-                 placeholder="Username" 
-                 value={user}
-                 onChange={e => setUser(e.target.value)}
+                 placeholder="Email address" 
+                 value={email}
+                 onChange={e => setEmail(e.target.value)}
                  className="w-full border border-slate-200 rounded-2xl py-3.5 pl-12 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 hover:border-slate-300 transition-colors" 
                />
              </div>
@@ -549,12 +793,12 @@ function LoginScreen({ onLogin }) {
              </div>
 
              <button type="submit" className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-blue-500 text-white font-bold shadow-lg shadow-blue-500/30 hover:opacity-90 hover:shadow-xl transition-all mt-4">
-               Sign In
+               {submitting ? "Processing..." : (isSignUp ? "Create Account" : "Sign In")}
              </button>
            </form>
 
            <div className="text-center mt-8 text-sm text-slate-600">
-             No account? <a href="#" className="text-pink-500 font-bold hover:underline">Create one</a>
+             {isSignUp ? "Already have an account?" : "No account?"} <button type="button" onClick={() => { setIsSignUp(!isSignUp); setLoginError(""); }} className="text-pink-500 font-bold hover:underline ml-1">{isSignUp ? "Sign In" : "Create one"}</button>
            </div>
         </div>
       </div>

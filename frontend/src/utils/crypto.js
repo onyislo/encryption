@@ -19,7 +19,12 @@ export async function generateKeyPair() {
 // Export public key to base64 string
 export async function exportPublicKey(key) {
   const exported = await window.crypto.subtle.exportKey("spki", key);
-  return btoa(String.fromCharCode(...new Uint8Array(exported)));
+  const bytes = new Uint8Array(exported);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 // Import public key from base64 string
@@ -48,7 +53,13 @@ export async function encryptMessage(publicKey, message) {
     publicKey,
     data
   );
-  return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+  // Use Array.from to avoid call stack overflow on large encrypted buffers
+  const bytes = new Uint8Array(encrypted);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 // Decrypt a message using a private key
