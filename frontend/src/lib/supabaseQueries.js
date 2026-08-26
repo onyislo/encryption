@@ -3,19 +3,42 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-export const isSupabaseConfigured = () => Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+export const isSupabaseConfigured = () => {
+  const url = import.meta.env.VITE_SUPABASE_URL || '';
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+  // Reject empty, placeholder, or template values
+  if (!url || !key) return false;
+  if (url.includes('your-project-id') || url.includes('placeholder') || key.includes('placeholder')) return false;
+  return true;
+};
 export const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder');
 
 /* =====================================================================
    1. AUTHENTICATION QUERIES
    ===================================================================== */
 
-export async function signUpUser(email, password) {
+export async function signUpUser(email, password, username) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
+    options: {
+      data: {
+        username: username || email.split('@')[0],
+      },
+    },
   });
   if (error) throw error;
+
+  // After sign-up, update the profile with the username
+  if (data.user) {
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update({ username: username || email.split('@')[0] })
+      .eq('id', data.user.id);
+    // Ignore profile update errors (e.g. profile not created yet by trigger)
+    if (profileError) console.warn('Profile update after signup:', profileError.message);
+  }
+
   return data;
 }
 
@@ -26,6 +49,21 @@ export async function signInUser(email, password) {
   });
   if (error) throw error;
   return data;
+}
+
+/**
+ * Fetch the profile username for the current user.
+ */
+export async function getCurrentUsername() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('username')
+    .eq('id', user.id)
+    .single();
+  if (error || !data) return user.email ? user.email.split('@')[0] : 'User';
+  return data.username || user.email.split('@')[0];
 }
 
 export async function signOutUser() {

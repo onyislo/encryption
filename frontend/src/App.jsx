@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Shield, Lock, User, Eye, EyeOff, Search, Plus, MessageSquare, ChevronLeft, Phone, Video, MoreVertical, Paperclip, Smile, Send, Info, Check, CheckCheck, Copy, Settings, Menu, AlertTriangle, X } from 'lucide-react';
 import { generateKeyPair, exportPublicKey, encryptMessage } from './utils/crypto';
-import { isSupabaseConfigured, signInUser, signUpUser, getCurrentUser, fetchUserRooms, fetchRoomMessages, sendEncryptedMessage, subscribeToMessages, updateProfile, searchProfiles, createRoom } from './lib/supabaseQueries';
+import { isSupabaseConfigured, signInUser, signUpUser, getCurrentUser, getCurrentUsername, fetchUserRooms, fetchRoomMessages, sendEncryptedMessage, subscribeToMessages, updateProfile, searchProfiles, createRoom } from './lib/supabaseQueries';
 
 const initialChats = {};
 
@@ -31,7 +31,8 @@ function App() {
         const user = await getCurrentUser();
         if (user) {
           setCurrentUser(user);
-          setUsername(user.email ? user.email.split('@')[0] : 'User');
+          const displayName = await getCurrentUsername();
+          setUsername(displayName);
           setIsLoggedIn(true);
         }
       } catch (err) {
@@ -692,10 +693,58 @@ function Participant({ avatar, name, status, online }) {
 function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [username, setUsernameLocal] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  useEffect(() => {
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+      setIsInstalled(true);
+      return;
+    }
+
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+      // Show the install banner after a short delay
+      setTimeout(() => setShowInstallBanner(true), 2000);
+    };
+
+    const onInstalled = () => {
+      setIsInstalled(true);
+      setShowInstallBanner(false);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', onInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log('Install outcome:', outcome);
+    setDeferredPrompt(null);
+    setShowInstallBanner(false);
+  };
+
+  const dismissInstall = () => {
+    setShowInstallBanner(false);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -709,24 +758,30 @@ function LoginScreen({ onLogin }) {
       setLoginError('Password must be at least 6 characters.');
       return;
     }
+    if (isSignUp && !username.trim()) {
+      setLoginError('Please choose a username.');
+      return;
+    }
 
     setSubmitting(true);
     try {
       if (isSupabaseConfigured()) {
         if (isSignUp) {
-          const res = await signUpUser(email.trim(), password);
+          const res = await signUpUser(email.trim(), password, username.trim());
           if (res.user) {
-            onLogin(email.split('@')[0]);
+            onLogin(username.trim());
           }
         } else {
           const res = await signInUser(email.trim(), password);
           if (res.user) {
-            onLogin(email.split('@')[0]);
+            // Fetch the actual profile username from the database
+            const displayName = await getCurrentUsername();
+            onLogin(displayName);
           }
         }
       } else {
         // Fallback for UI preview if env is not configured yet
-        onLogin(email.split('@')[0]);
+        onLogin(isSignUp ? username.trim() : email.split('@')[0]);
       }
     } catch (err) {
       console.error("Auth error:", err);
@@ -768,6 +823,18 @@ function LoginScreen({ onLogin }) {
            </div>
 
            <form className="space-y-4" onSubmit={handleSubmit}>
+             {isSignUp && (
+               <div className="relative">
+                 <User className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                 <input 
+                   type="text" 
+                   placeholder="Username" 
+                   value={username}
+                   onChange={e => setUsernameLocal(e.target.value)}
+                   className="w-full border border-slate-200 rounded-2xl py-3.5 pl-12 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 hover:border-slate-300 transition-colors" 
+                 />
+               </div>
+             )}
              <div className="relative">
                <User className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                <input 
@@ -780,8 +847,18 @@ function LoginScreen({ onLogin }) {
              </div>
              <div className="relative">
                <Lock className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-               <input type="password" placeholder="Password" className="w-full border border-slate-200 rounded-2xl py-3.5 pl-12 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 hover:border-slate-300 transition-colors" />
-               <Eye className="w-5 h-5 absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-slate-600" />
+               <input 
+                 type={showPassword ? 'text' : 'password'} 
+                 placeholder="Password" 
+                 value={password}
+                 onChange={e => setPassword(e.target.value)}
+                 className="w-full border border-slate-200 rounded-2xl py-3.5 pl-12 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 hover:border-slate-300 transition-colors" 
+               />
+               {showPassword ? (
+                 <EyeOff className="w-5 h-5 absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-slate-600" onClick={() => setShowPassword(false)} />
+               ) : (
+                 <Eye className="w-5 h-5 absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-slate-600" onClick={() => setShowPassword(true)} />
+               )}
              </div>
              
              <div className="flex items-center justify-between text-xs px-1 py-1">
@@ -809,6 +886,49 @@ function LoginScreen({ onLogin }) {
           <div className="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-blue-500/5 to-transparent"></div>
           <Lock className="w-96 h-96 text-slate-200/50 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
       </div>
+
+      {/* PWA Install Banner */}
+      {showInstallBanner && !isInstalled && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 p-4 animate-slide-up">
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl p-5 mx-auto max-w-md relative overflow-hidden">
+            {/* Gradient accent */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-pink-500 to-blue-500"></div>
+            
+            <button 
+              onClick={dismissInstall}
+              className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full hover:bg-slate-100 transition-colors text-slate-400 hover:text-slate-600"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-pink-500 to-blue-500 flex items-center justify-center flex-shrink-0 shadow-lg">
+                <Shield className="w-7 h-7 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-slate-800 text-sm mb-1">Install SecureChat</h3>
+                <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                  Add to your home screen for quick access and a native app experience.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleInstall}
+                    className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-blue-500 text-white font-bold text-xs hover:opacity-90 transition-all shadow-md active:scale-95"
+                  >
+                    Install App
+                  </button>
+                  <button
+                    onClick={dismissInstall}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-medium text-xs hover:bg-slate-50 transition-colors"
+                  >
+                    Not now
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
