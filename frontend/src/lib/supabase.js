@@ -280,6 +280,82 @@ export function subscribeToMessages(roomId, onNewMessage) {
     .subscribe();
 }
 
+export async function startDirectMessage(targetUserId, targetUsername) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const existingRooms = await fetchUserRooms();
+  const existingDirect = existingRooms?.find(r => 
+    r.type === 'direct' && 
+    r.participants?.some(p => p.user?.id === targetUserId)
+  );
+
+  if (existingDirect) {
+    return existingDirect;
+  }
+
+  const { data: room, error: roomError } = await supabase
+    .from('rooms')
+    .insert({
+      name: targetUsername ? `@${targetUsername}` : 'Direct Message',
+      type: 'direct',
+    })
+    .select()
+    .single();
+
+  if (roomError) throw roomError;
+
+  const allParticipantIds = Array.from(new Set([user.id, targetUserId]));
+  const participantsInsert = allParticipantIds.map(uid => ({
+    room_id: room.id,
+    user_id: uid,
+  }));
+
+  const { error: joinError } = await supabase
+    .from('room_participants')
+    .insert(participantsInsert);
+
+  if (joinError) throw joinError;
+
+  return room;
+}
+
+export function subscribeToPresence(userId, username, onPresenceChange) {
+  const channel = supabase.channel('online-users', {
+    config: {
+      presence: {
+        key: userId,
+      },
+    },
+  });
+
+  channel
+    .on('presence', { event: 'sync' }, () => {
+      const state = channel.presenceState();
+      const onlineUserIds = Object.keys(state);
+      onPresenceChange(onlineUserIds);
+    })
+    .on('presence', { event: 'join' }, () => {
+      const state = channel.presenceState();
+      onPresenceChange(Object.keys(state));
+    })
+    .on('presence', { event: 'leave' }, () => {
+      const state = channel.presenceState();
+      onPresenceChange(Object.keys(state));
+    })
+    .subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await channel.track({
+          user_id: userId,
+          username: username,
+          online_at: new Date().toISOString(),
+        });
+      }
+    });
+
+  return channel;
+}
+
 /* =====================================================================
    5. STORAGE QUERIES
    ===================================================================== */

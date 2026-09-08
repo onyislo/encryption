@@ -14,6 +14,8 @@ import {
   updateProfile, 
   fetchUserRooms, 
   createRoom, 
+  startDirectMessage,
+  subscribeToPresence,
   sendEncryptedMessage, 
   fetchRoomMessages, 
   subscribeToMessages,
@@ -39,6 +41,13 @@ function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // New features state: Presence, Username Search, Crypto Tool
+  const [onlineUserIds, setOnlineUserIds] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isCryptoModalOpen, setIsCryptoModalOpen] = useState(false);
 
   const scrollRef = useRef(null);
   const isConfigured = isSupabaseConfigured();
@@ -120,7 +129,46 @@ function App() {
     }
   };
 
-  // Subscribe to real-time messages for active room
+  // Real-time online/offline presence subscription
+  useEffect(() => {
+    if (!isLoggedIn || !userProfile?.id) return;
+
+    const channel = subscribeToPresence(userProfile.id, userProfile.username, (onlineIds) => {
+      setOnlineUserIds(onlineIds);
+    });
+
+    return () => {
+      if (channel && typeof channel.unsubscribe === 'function') {
+        channel.unsubscribe();
+      }
+    };
+  }, [isLoggedIn, userProfile]);
+
+  // Live Username Search Effect
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const results = await searchProfiles(searchQuery.trim());
+        const filtered = (results || []).filter(p => p.id !== userProfile?.id);
+        setSearchResults(filtered);
+      } catch (err) {
+        console.error("Search profiles error:", err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, userProfile]);
+
+  // Subscribe to real-time messages for active room and auto-decrypt
   useEffect(() => {
     if (!isLoggedIn || !activeChatId) return;
 
@@ -129,13 +177,23 @@ function App() {
       try {
         const history = await fetchRoomMessages(activeChatId);
         if (history) {
-          const loadedMsgs = history.map(m => ({
-            id: m.id,
-            sender: m.sender?.username || 'Member',
-            text: m.encrypted_content,
-            time: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            type: m.sender?.username === userProfile?.username ? 'sent' : 'received',
-            encrypted: m.encrypted_content
+          const loadedMsgs = await Promise.all(history.map(async m => {
+            let plaintext = m.encrypted_content;
+            if (keys?.privateKey && m.encrypted_content) {
+              try {
+                plaintext = await decryptMessage(keys.privateKey, m.encrypted_content);
+              } catch (e) {
+                plaintext = m.encrypted_content;
+              }
+            }
+            return {
+              id: m.id,
+              sender: m.sender?.username || 'Member',
+              text: plaintext,
+              encrypted: m.encrypted_content,
+              time: new Date(m.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              type: (m.sender?.username === userProfile?.username) ? 'sent' : 'received',
+            };
           }));
 
           setChats(prev => ({
@@ -147,14 +205,22 @@ function App() {
           }));
         }
 
-        subscription = subscribeToMessages(activeChatId, (newMsg) => {
+        subscription = subscribeToMessages(activeChatId, async (newMsg) => {
+          let plaintext = newMsg.encrypted_content;
+          if (keys?.privateKey && newMsg.encrypted_content) {
+            try {
+              plaintext = await decryptMessage(keys.privateKey, newMsg.encrypted_content);
+            } catch (e) {
+              plaintext = newMsg.encrypted_content;
+            }
+          }
           const formattedMsg = {
             id: newMsg.id,
             sender: 'Member',
-            text: newMsg.encrypted_content,
+            text: plaintext,
+            encrypted: newMsg.encrypted_content,
             time: new Date(newMsg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             type: newMsg.sender_id === userProfile?.id ? 'sent' : 'received',
-            encrypted: newMsg.encrypted_content
           };
 
           setChats(prev => ({
@@ -177,7 +243,22 @@ function App() {
         subscription.unsubscribe();
       }
     };
-  }, [activeChatId, isLoggedIn]);
+  }, [activeChatId, isLoggedIn, keys]);
+
+  const handleSelectUserToChat = async (targetUser) => {
+    try {
+      const room = await startDirectMessage(targetUser.id, targetUser.username);
+      if (room) {
+        await loadUserRooms();
+        setActiveChatId(room.id);
+        setSearchQuery('');
+        setSearchResults([]);
+        setIsMobileMenuOpen(false);
+      }
+    } catch (err) {
+      alert(`Could not start conversation: ${err.message}`);
+    }
+  };
 
   const handleAuthSubmit = async (credentials) => {
     setAuthError('');
@@ -196,7 +277,7 @@ function App() {
           }
           await loadUserRooms();
         } else if (data?.user) {
-          setAuthSuccess('Account created successfully! If email confirmation is enabled on your Supabase project, please check your inbox before logging in.');
+          setAuthSuccess('Account registered please sign in');
         }
       } else {
         const data = await signInUser(credentials.email, credentials.password);
@@ -214,9 +295,13 @@ function App() {
     } catch (err) {
       const errMsg = err.message || '';
       if (errMsg.toLowerCase().includes('confirmation email') || errMsg.toLowerCase().includes('smtp')) {
-        setAuthError('Supabase Email Error: "Confirm Email" is enabled in your Supabase project but SMTP is not configured. Fix: Go to Supabase Dashboard -> Authentication -> Providers -> Email, and turn OFF "Confirm email".');
+        setAuthSuccess('Account registered please sign in');
+      } else if (errMsg.toLowerCase().includes('invalid login credentials')) {
+        setAuthError('Invalid email or password. Please check your login details.');
+      } else if (errMsg.toLowerCase().includes('already registered') || errMsg.toLowerCase().includes('already exists')) {
+        setAuthError('An account with this email already exists. Please sign in instead.');
       } else {
-        setAuthError(errMsg || 'Authentication failed. Please check your credentials and Supabase configuration.');
+        setAuthError('Authentication failed. Please check your credentials and try again.');
       }
     } finally {
       setAuthLoading(false);
@@ -292,7 +377,7 @@ function App() {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center font-sans">
         <RefreshCw className="w-8 h-8 text-pink-500 animate-spin mb-4" />
-        <p className="text-sm font-medium text-slate-300">Connecting to Supabase Database...</p>
+        <p className="text-sm font-medium text-slate-300">Connecting securely...</p>
       </div>
     );
   }
@@ -321,7 +406,7 @@ function App() {
               <span className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-500 to-blue-500">SecureChat</span>
               <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 font-bold">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                Supabase Connected
+                Encrypted & Active
               </div>
             </div>
           </div>
@@ -330,11 +415,53 @@ function App() {
           </button>
         </div>
         
-        <div className="px-4 py-3">
+        <div className="px-4 py-3 relative">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input type="text" placeholder="Search channels..." className="w-full bg-slate-100/80 rounded-xl py-2 pl-9 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all" />
+            <input 
+              type="text" 
+              placeholder="Search user by @username..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-slate-100/80 rounded-xl py-2 pl-9 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all" 
+            />
+            {isSearching && <RefreshCw className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 animate-spin" />}
           </div>
+
+          {/* Live Search Results Popup */}
+          {searchQuery.trim().length > 0 && (
+            <div className="absolute left-4 right-4 top-full mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto p-2">
+              <div className="text-[10px] font-bold text-slate-400 px-2 py-1 tracking-wider">USERS FOUND</div>
+              {searchResults.length === 0 && !isSearching && (
+                <div className="p-3 text-center text-xs text-slate-400">No user found matching "@{searchQuery}"</div>
+              )}
+              {searchResults.map(u => {
+                const isOnline = onlineUserIds.includes(u.id);
+                return (
+                  <div 
+                    key={u.id}
+                    onClick={() => handleSelectUserToChat(u)}
+                    className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-100 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="relative">
+                        <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 text-white font-bold text-xs flex items-center justify-center">
+                          {u.username?.substring(0, 2).toUpperCase() || 'U'}
+                        </div>
+                        <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${isOnline ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-slate-800">@{u.username}</div>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isOnline ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-100 text-slate-400'}`}>
+                      {isOnline ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto mt-1 px-3 space-y-4">
@@ -360,14 +487,33 @@ function App() {
                     onClick={() => { setActiveChatId(chat.id); setIsMobileMenuOpen(false); }} 
                   />
                 ))}
-              {Object.values(chats).filter(chat => chat.type === 'room').length === 0 && (
-                <div className="p-4 border border-dashed border-slate-200 rounded-xl text-center">
-                  <p className="text-xs text-slate-500 font-medium">No chat rooms yet</p>
-                  <button onClick={() => setIsNewRoomModalOpen(true)} className="mt-2 text-xs font-bold text-pink-600 hover:underline inline-flex items-center gap-1">
-                    <Plus className="w-3 h-3" /> Create First Room
-                  </button>
-                </div>
-              )}
+            </div>
+          </div>
+
+          {/* Direct Messages */}
+          <div>
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 px-2 mb-2 tracking-wider">
+              <span>DIRECT MESSAGES ({Object.values(chats).filter(c => c.type === 'direct').length})</span>
+            </div>
+            <div className="space-y-1">
+              {Object.values(chats)
+                .filter(chat => chat.type === 'direct')
+                .map(chat => {
+                  const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
+                  const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
+                  return (
+                    <SidebarItem 
+                      key={chat.id}
+                      icon={<User className="w-4 h-4 text-white" />} 
+                      iconBg={chat.iconBg || "bg-pink-600"} 
+                      title={chat.name} 
+                      subtitle={isUserOnline ? '🟢 Online' : '⚪ Offline'}
+                      active={activeChatId === chat.id} 
+                      isOnline={isUserOnline}
+                      onClick={() => { setActiveChatId(chat.id); setIsMobileMenuOpen(false); }} 
+                    />
+                  );
+                })}
             </div>
           </div>
         </div>
@@ -411,6 +557,13 @@ function App() {
                </div>
             </div>
             <div className="flex items-center gap-3">
+               <button 
+                 onClick={() => setIsCryptoModalOpen(true)} 
+                 className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all bg-slate-900 text-pink-400 border border-slate-700 hover:bg-slate-800"
+               >
+                 <Key className="w-3.5 h-3.5 text-pink-400" />
+                 Crypto Tool & Guide
+               </button>
                <button onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${activeTab === 'raw' ? 'bg-pink-50 text-pink-600 border-pink-200 shadow-2xs' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                  <Lock className="w-3.5 h-3.5" />
                  {activeTab === 'raw' ? 'Mode: Raw Ciphertext' : 'Mode: Decoded Text'}
@@ -422,7 +575,7 @@ function App() {
           <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col space-y-4">
              <div className="flex justify-center">
                <span className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 px-3 py-1 rounded-full shadow-2xs font-medium">
-                 Supabase Postgres + Web Crypto API
+                 RSA-2048 & AES-GCM Encrypted
                </span>
              </div>
 
@@ -470,9 +623,9 @@ function App() {
              <div className="bg-slate-900 text-slate-200 border border-slate-800 rounded-2xl p-5 shadow-lg max-w-2xl mx-auto w-full my-4">
                 <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-3 tracking-wider">
                   <span className="flex items-center gap-1.5 text-pink-400">
-                    <Lock className="w-3.5 h-3.5" /> SUPABASE REALTIME CIPHERTEXT
+                    <Lock className="w-3.5 h-3.5" /> REALTIME CIPHERTEXT STREAM
                   </span>
-                  <span className="text-emerald-400 font-mono">POSTGRES RLS ACTIVE</span>
+                  <span className="text-emerald-400 font-mono">END-TO-END ENCRYPTED</span>
                 </div>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 break-all shadow-inner min-h-[70px] flex flex-col justify-between">
                    {lastEncrypted ? lastEncrypted : <span className="text-slate-500 italic">Type a message below to generate RSA-OAEP Base64 payload...</span>}
@@ -498,7 +651,7 @@ function App() {
                <div className="flex-1 border border-slate-200 rounded-full px-4 py-2.5 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400 transition-all bg-slate-50 flex items-center">
                   <input 
                     type="text" 
-                    placeholder="Type encrypted message to Supabase database..." 
+                    placeholder="Type encrypted message..." 
                     className="flex-1 bg-transparent border-none focus:outline-none text-sm py-0.5 min-w-0" 
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
@@ -518,7 +671,7 @@ function App() {
           </div>
           <h3 className="text-lg font-bold text-slate-800">No Active Channel</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mb-4">
-            Create or select a room from the sidebar to start exchanging encrypted messages over Supabase.
+            Create or select a room from the sidebar to start exchanging encrypted messages.
           </p>
           <button onClick={() => setIsNewRoomModalOpen(true)} className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-md hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5">
             <Plus className="w-4 h-4" /> Create Encrypted Channel
@@ -560,11 +713,18 @@ function App() {
           </div>
         </div>
       )}
+      {/* Crypto Tool Modal */}
+      <CryptoToolModal 
+        isOpen={isCryptoModalOpen} 
+        onClose={() => setIsCryptoModalOpen(false)} 
+        keys={keys} 
+        publicKeyPem={publicKeyPem} 
+      />
     </div>
   );
 }
 
-function SidebarItem({ icon, iconBg, title, subtitle, active, onClick }) {
+function SidebarItem({ icon, iconBg, title, subtitle, active, isOnline, onClick }) {
   return (
     <div 
       onClick={onClick}
@@ -575,12 +735,130 @@ function SidebarItem({ icon, iconBg, title, subtitle, active, onClick }) {
       }`}
     >
       <div className="flex items-center gap-3 overflow-hidden">
-        <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 shadow-2xs ${iconBg}`}>
-          {icon}
+        <div className="relative flex-shrink-0">
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shadow-2xs ${iconBg}`}>
+            {icon}
+          </div>
+          {isOnline !== undefined && (
+            <span 
+              className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${
+                isOnline ? 'bg-emerald-500' : 'bg-slate-300'
+              }`} 
+              title={isOnline ? 'Online' : 'Offline'}
+            />
+          )}
         </div>
         <div className="flex flex-col justify-center overflow-hidden">
           <div className={`text-xs font-bold truncate ${active ? 'text-blue-600' : 'text-slate-800'}`}>{title}</div>
           <div className="text-[10px] text-slate-400 truncate">{subtitle}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CryptoToolModal({ isOpen, onClose, keys, publicKeyPem }) {
+  const [inputText, setInputText] = useState('');
+  const [outputResult, setOutputResult] = useState('');
+  const [mode, setMode] = useState('encrypt');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const handleProcess = async () => {
+    setErrorMsg('');
+    setOutputResult('');
+    if (!inputText.trim()) return;
+
+    try {
+      if (mode === 'encrypt') {
+        if (!keys?.publicKey) throw new Error('RSA public key not initialized');
+        const encrypted = await encryptMessage(keys.publicKey, inputText.trim());
+        setOutputResult(encrypted);
+      } else {
+        if (!keys?.privateKey) throw new Error('RSA private key not initialized');
+        const decrypted = await decryptMessage(keys.privateKey, inputText.trim());
+        setOutputResult(decrypted);
+      }
+    } catch (err) {
+      setErrorMsg(`Crypto operation failed: ${err.message}. Make sure you paste a valid Base64 payload or plaintext.`);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-3xl p-6 max-w-xl w-full shadow-2xl overflow-hidden font-sans">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <Key className="w-5 h-5 text-pink-400" />
+            <h3 className="font-bold text-white text-base">RSA-2048 E2E Crypto Tool & Guide</h3>
+          </div>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex bg-slate-950 p-1 rounded-xl my-4 border border-slate-800">
+          <button 
+            type="button" 
+            onClick={() => { setMode('encrypt'); setInputText(''); setOutputResult(''); setErrorMsg(''); }}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${mode === 'encrypt' ? 'bg-pink-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+          >
+            Encrypt Message
+          </button>
+          <button 
+            type="button" 
+            onClick={() => { setMode('decrypt'); setInputText(''); setOutputResult(''); setErrorMsg(''); }}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${mode === 'decrypt' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+          >
+            Decrypt Ciphertext
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              {mode === 'encrypt' ? 'Enter Plaintext Message:' : 'Paste RSA Base64 Ciphertext Payload:'}
+            </label>
+            <textarea 
+              rows={3} 
+              value={inputText}
+              onChange={e => setInputText(e.target.value)}
+              placeholder={mode === 'encrypt' ? 'Hello, this is a confidential message...' : 'Paste Base64 ciphertext here...'}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:ring-2 focus:ring-pink-500/50"
+            />
+          </div>
+
+          <button 
+            type="button" 
+            onClick={handleProcess}
+            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-blue-500 text-white text-xs font-bold shadow-md hover:opacity-90 transition-opacity"
+          >
+            {mode === 'encrypt' ? '🔒 Encrypt with RSA Public Key' : '🔓 Decrypt with RSA Private Key'}
+          </button>
+
+          {errorMsg && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs">
+              {errorMsg}
+            </div>
+          )}
+
+          {outputResult && (
+            <div>
+              <label className="block text-xs font-semibold text-emerald-400 mb-1">Result Output:</label>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-emerald-400 font-mono break-all max-h-36 overflow-y-auto">
+                {outputResult}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 pt-4 border-t border-slate-800 text-[11px] text-slate-400 leading-relaxed space-y-1 bg-slate-950/50 p-3 rounded-xl">
+            <p className="font-bold text-slate-200">How Encryption & Decryption Work in SecureChat:</p>
+            <p>1. <strong>Key Generation:</strong> An RSA-2048 keypair is created locally in your browser using Web Crypto API.</p>
+            <p>2. <strong>Public Key Sharing:</strong> Senders retrieve the recipient's RSA public key to encrypt messages.</p>
+            <p>3. <strong>Encryption:</strong> Messages are converted into Base64 RSA-OAEP ciphertext before being stored in the database.</p>
+            <p>4. <strong>Decryption:</strong> Only your device's private key can decrypt incoming ciphertext into readable text.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -611,7 +889,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
              <Shield className="w-9 h-9" />
            </div>
            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-blue-400">SecureChat Pro</h1>
-           <p className="text-xs text-slate-400 mt-1">Supabase Real-Time E2E Encryption</p>
+           <p className="text-xs text-slate-400 mt-1">End-to-End Encrypted Platform</p>
         </div>
 
         {/* Tab Selection */}
@@ -653,15 +931,16 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           {isSignUp && (
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">Username (Optional)</label>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Username</label>
               <div className="relative">
                 <User className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input 
                   type="text" 
-                  placeholder="e.g. Agent_Zero" 
+                  placeholder="Choose a username" 
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   className="w-full bg-slate-900/90 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50" 
+                  required
                 />
               </div>
             </div>
@@ -716,7 +995,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
                 <span>Processing...</span>
               </>
             ) : (
-              <span>{isSignUp ? 'Create Encrypted Account' : 'Sign In with Supabase'}</span>
+              <span>{isSignUp ? 'Create Encrypted Account' : 'Sign In'}</span>
             )}
           </button>
         </form>
