@@ -16,7 +16,8 @@
     "lucide-react": "^1.14.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "@supabase/supabase-js": "^2.48.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",

@@ -21,3 +21,35 @@
 ::-webkit-scrollbar-thumb {
   @apply bg-slate-300 rounded-full hover:bg-slate-400 transition-colors;
 }
+
+/* PWA Install Banner Animation */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* PWA: hide address bar on scroll */
+html {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Safe area for notch devices */
+@supports (padding-top: env(safe-area-inset-top)) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
