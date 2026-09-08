@@ -536,148 +536,224 @@ function App() {
       </div>
 
       {/* Main Chat Area */}
-      {activeChat ? (
-        <div className="flex-1 flex flex-col bg-white border-r border-slate-200 relative overflow-hidden">
-          {/* Top Bar */}
-          <div className="h-16 border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 bg-white/80 backdrop-blur-md z-10">
-            <div className="flex items-center gap-3">
-               <button className="lg:hidden text-slate-600" onClick={() => setIsMobileMenuOpen(true)}>
-                  <Menu className="w-6 h-6" />
-               </button>
-               <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-sm ${activeChat.iconBg || 'bg-slate-100'}`}>
-                  <Lock className="w-5 h-5 text-white" />
-               </div>
-               <div>
-                 <h2 className="font-bold text-slate-800 leading-tight text-sm md:text-base">{activeChat.name}</h2>
-                 <div className="flex items-center gap-2 text-xs text-slate-500">
-                   <span className="flex items-center gap-1 text-emerald-600 font-medium text-[11px]">
-                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> RSA-2048 E2E Active
-                   </span>
-                 </div>
-               </div>
-            </div>
-            <div className="flex items-center gap-3">
-               <button 
-                 onClick={() => setIsCryptoModalOpen(true)} 
-                 className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all bg-slate-900 text-pink-400 border border-slate-700 hover:bg-slate-800"
-               >
-                 <Key className="w-3.5 h-3.5 text-pink-400" />
-                 Crypto Tool & Guide
-               </button>
-               <button onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${activeTab === 'raw' ? 'bg-pink-50 text-pink-600 border-pink-200 shadow-2xs' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
-                 <Lock className="w-3.5 h-3.5" />
-                 {activeTab === 'raw' ? 'Mode: Raw Ciphertext' : 'Mode: Decoded Text'}
-               </button>
-            </div>
+      <div className="flex-1 flex flex-col bg-white border-r border-slate-200 relative overflow-hidden pb-16 lg:pb-0">
+        {/* Always-visible Mobile Header */}
+        <div className="lg:hidden h-14 bg-slate-900 border-b border-slate-800 text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
+          <button 
+            onClick={() => setIsMobileMenuOpen(true)} 
+            className="p-1.5 rounded-xl bg-slate-800 border border-slate-700 text-pink-400 hover:text-white flex items-center gap-2 transition-colors active:scale-95 shadow-sm"
+            title="Open Menu"
+          >
+            <Menu className="w-5 h-5" />
+            <span className="text-xs font-bold pr-1">Menu</span>
+          </button>
+
+          <div className="flex items-center gap-2">
+            <Shield className="w-5 h-5 text-pink-400" />
+            <span className="font-bold text-sm bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-blue-400">SecureChat</span>
           </div>
 
-          {/* Messages Container */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col space-y-4">
-             <div className="flex justify-center">
-               <span className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 px-3 py-1 rounded-full shadow-2xs font-medium">
-                 RSA-2048 & AES-GCM Encrypted
-               </span>
-             </div>
+          <button 
+            onClick={() => setIsCryptoModalOpen(true)} 
+            className="p-1.5 rounded-xl bg-slate-800 border border-slate-700 text-pink-400 hover:text-white transition-colors"
+            title="Crypto Guide"
+          >
+            <Key className="w-4 h-4" />
+          </button>
+        </div>
 
-             {(!activeChat.messages || activeChat.messages.length === 0) && (
-                <div className="text-center text-slate-400 text-sm py-16 flex flex-col items-center">
-                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3 text-slate-400">
-                    <Shield className="w-6 h-6" />
-                  </div>
-                  <p className="font-bold text-slate-700">No messages in channel</p>
-                  <p className="text-xs text-slate-400 mt-1 max-w-sm">Messages sent here are encrypted with RSA-OAEP before saving to the database.</p>
-                </div>
-             )}
-
-             {activeChat.messages && activeChat.messages.map((msg, idx) => {
-               const isSent = msg.type === 'sent';
-               const displayText = (activeTab === 'raw' && msg.encrypted) ? msg.encrypted : msg.text;
-
-               return (
-                 <div key={idx} className={`flex gap-2.5 ${isSent ? 'justify-end' : ''}`}>
-                   {!isSent && (
-                     <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
-                        {msg.sender ? msg.sender.charAt(0).toUpperCase() : 'M'}
-                     </div>
-                   )}
-                   <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[85%] md:max-w-lg`}>
-                     {!isSent && (
-                        <span className="text-[10px] text-slate-400 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
-                     )}
-                     <div className={`px-4 py-3 rounded-2xl text-xs md:text-sm leading-relaxed shadow-2xs ${
-                       isSent 
-                         ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-tr-none' 
-                         : 'bg-slate-100 text-slate-800 border border-slate-200/60 rounded-tl-none'
-                     } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-xs break-all bg-slate-900 text-emerald-400 border-none' : ''}`}>
-                       {displayText}
-                     </div>
-                     <span className={`text-[10px] text-slate-400 mt-1 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
-                       {msg.time} {isSent && <Check className="w-3 h-3 text-blue-500" />}
+        {activeChat ? (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Top Bar */}
+            <div className="h-16 border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 bg-white/80 backdrop-blur-md z-10">
+              <div className="flex items-center gap-3">
+                 <button className="hidden lg:hidden text-slate-600" onClick={() => setIsMobileMenuOpen(true)}>
+                    <Menu className="w-6 h-6" />
+                 </button>
+                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-sm ${activeChat.iconBg || 'bg-slate-100'}`}>
+                    <Lock className="w-5 h-5 text-white" />
+                 </div>
+                 <div>
+                   <h2 className="font-bold text-slate-800 leading-tight text-sm md:text-base">{activeChat.name}</h2>
+                   <div className="flex items-center gap-2 text-xs text-slate-500">
+                     <span className="flex items-center gap-1 text-emerald-600 font-medium text-[11px]">
+                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> RSA-2048 E2E Active
                      </span>
                    </div>
                  </div>
-               );
-             })}
+              </div>
+              <div className="flex items-center gap-2 md:gap-3">
+                 <button 
+                   onClick={() => setIsCryptoModalOpen(true)} 
+                   className="hidden sm:flex px-3 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-all bg-slate-900 text-pink-400 border border-slate-700 hover:bg-slate-800"
+                 >
+                   <Key className="w-3.5 h-3.5 text-pink-400" />
+                   Crypto Tool
+                 </button>
+                 <button onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${activeTab === 'raw' ? 'bg-pink-50 text-pink-600 border-pink-200 shadow-2xs' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                   <Lock className="w-3.5 h-3.5" />
+                   {activeTab === 'raw' ? 'Raw Cipher' : 'Decoded'}
+                 </button>
+              </div>
+            </div>
 
-             {/* Live Ciphertext Inspector */}
-             <div className="bg-slate-900 text-slate-200 border border-slate-800 rounded-2xl p-5 shadow-lg max-w-2xl mx-auto w-full my-4">
-                <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-3 tracking-wider">
-                  <span className="flex items-center gap-1.5 text-pink-400">
-                    <Lock className="w-3.5 h-3.5" /> REALTIME CIPHERTEXT STREAM
-                  </span>
-                  <span className="text-emerald-400 font-mono">END-TO-END ENCRYPTED</span>
-                </div>
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 break-all shadow-inner min-h-[70px] flex flex-col justify-between">
-                   {lastEncrypted ? lastEncrypted : <span className="text-slate-500 italic">Type a message below to generate RSA-OAEP Base64 payload...</span>}
-                   {lastEncrypted && (
-                      <div className="flex justify-end mt-3">
-                         <button type="button" onClick={copyToClipboard} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 hover:bg-slate-700 transition-colors">
-                             <Copy className="w-3.5 h-3.5 text-pink-400" /> Copy Payload
-                         </button>
-                      </div>
-                   )}
-                </div>
-             </div>
-
-             <div ref={scrollRef}></div>
-          </div>
-
-          {/* Message Input */}
-          <form onSubmit={handleSend} className="p-4 bg-white border-t border-slate-200">
-             <div className="flex items-center gap-3 max-w-4xl mx-auto">
-               <button type="button" className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors flex-shrink-0">
-                 <Paperclip className="w-5 h-5" />
-               </button>
-               <div className="flex-1 border border-slate-200 rounded-full px-4 py-2.5 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400 transition-all bg-slate-50 flex items-center">
-                  <input 
-                    type="text" 
-                    placeholder="Type encrypted message..." 
-                    className="flex-1 bg-transparent border-none focus:outline-none text-sm py-0.5 min-w-0" 
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                  />
-                  <Smile className="w-5 h-5 text-slate-400 cursor-pointer hover:text-slate-600 ml-2 flex-shrink-0" />
+            {/* Messages Container */}
+            <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col space-y-4">
+               <div className="flex justify-center">
+                 <span className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 px-3 py-1 rounded-full shadow-2xs font-medium">
+                   RSA-2048 & AES-GCM Encrypted
+                 </span>
                </div>
-               <button type="submit" disabled={!input.trim()} className="w-11 h-11 rounded-full bg-gradient-to-r from-pink-500 to-blue-500 flex items-center justify-center text-white flex-shrink-0 shadow-md hover:shadow-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:grayscale active:scale-95">
-                 <Send className="w-5 h-5 ml-0.5" />
-               </button>
-             </div>
-          </form>
-        </div>
-      ) : (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50">
-          <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-blue-500 shadow-md mb-4">
-            <Lock className="w-8 h-8" />
+
+               {(!activeChat.messages || activeChat.messages.length === 0) && (
+                  <div className="text-center text-slate-400 text-sm py-16 flex flex-col items-center">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3 text-slate-400">
+                      <Shield className="w-6 h-6" />
+                    </div>
+                    <p className="font-bold text-slate-700">No messages in channel</p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-sm">Messages sent here are encrypted with RSA-OAEP before saving to the database.</p>
+                  </div>
+               )}
+
+               {activeChat.messages && activeChat.messages.map((msg, idx) => {
+                 const isSent = msg.type === 'sent';
+                 const displayText = (activeTab === 'raw' && msg.encrypted) ? msg.encrypted : msg.text;
+
+                 return (
+                   <div key={idx} className={`flex gap-2.5 ${isSent ? 'justify-end' : ''}`}>
+                     {!isSent && (
+                       <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
+                          {msg.sender ? msg.sender.charAt(0).toUpperCase() : 'M'}
+                       </div>
+                     )}
+                     <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[85%] md:max-w-lg`}>
+                       {!isSent && (
+                          <span className="text-[10px] text-slate-400 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
+                       )}
+                       <div className={`px-4 py-3 rounded-2xl text-xs md:text-sm leading-relaxed shadow-2xs ${
+                         isSent 
+                           ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-tr-none' 
+                           : 'bg-slate-100 text-slate-800 border border-slate-200/60 rounded-tl-none'
+                       } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-xs break-all bg-slate-900 text-emerald-400 border-none' : ''}`}>
+                         {displayText}
+                       </div>
+                       <span className={`text-[10px] text-slate-400 mt-1 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
+                         {msg.time} {isSent && <Check className="w-3 h-3 text-blue-500" />}
+                       </span>
+                     </div>
+                   </div>
+                 );
+               })}
+
+               {/* Live Ciphertext Inspector */}
+               <div className="bg-slate-900 text-slate-200 border border-slate-800 rounded-2xl p-5 shadow-lg max-w-2xl mx-auto w-full my-4">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-3 tracking-wider">
+                    <span className="flex items-center gap-1.5 text-pink-400">
+                      <Lock className="w-3.5 h-3.5" /> REALTIME CIPHERTEXT STREAM
+                    </span>
+                    <span className="text-emerald-400 font-mono">END-TO-END ENCRYPTED</span>
+                  </div>
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 break-all shadow-inner min-h-[70px] flex flex-col justify-between">
+                     {lastEncrypted ? lastEncrypted : <span className="text-slate-500 italic">Type a message below to generate RSA-OAEP Base64 payload...</span>}
+                     {lastEncrypted && (
+                        <div className="flex justify-end mt-3">
+                           <button type="button" onClick={copyToClipboard} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 hover:bg-slate-700 transition-colors">
+                               <Copy className="w-3.5 h-3.5 text-pink-400" /> Copy Payload
+                           </button>
+                        </div>
+                     )}
+                  </div>
+               </div>
+
+               <div ref={scrollRef}></div>
+            </div>
+
+            {/* Message Input */}
+            <form onSubmit={handleSend} className="p-3 md:p-4 bg-white border-t border-slate-200">
+               <div className="flex items-center gap-2 md:gap-3 max-w-4xl mx-auto">
+                 <button type="button" className="w-9 h-9 md:w-10 md:h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors flex-shrink-0">
+                   <Paperclip className="w-4 h-4 md:w-5 md:h-5" />
+                 </button>
+                 <div className="flex-1 border border-slate-200 rounded-full px-3.5 py-2 md:py-2.5 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400 transition-all bg-slate-50 flex items-center">
+                    <input 
+                      type="text" 
+                      placeholder="Type encrypted message..." 
+                      className="flex-1 bg-transparent border-none focus:outline-none text-xs md:text-sm py-0.5 min-w-0" 
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                    />
+                    <Smile className="w-4 h-4 md:w-5 md:h-5 text-slate-400 cursor-pointer hover:text-slate-600 ml-1.5 flex-shrink-0" />
+                 </div>
+                 <button type="submit" disabled={!input.trim()} className="w-10 h-10 md:w-11 md:h-11 rounded-full bg-gradient-to-r from-pink-500 to-blue-500 flex items-center justify-center text-white flex-shrink-0 shadow-md hover:shadow-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:grayscale active:scale-95">
+                   <Send className="w-4 h-4 md:w-5 md:h-5 ml-0.5" />
+                 </button>
+               </div>
+            </form>
           </div>
-          <h3 className="text-lg font-bold text-slate-800">No Active Channel</h3>
-          <p className="text-xs text-slate-500 mt-1 max-w-sm mb-4">
-            Create or select a room from the sidebar to start exchanging encrypted messages.
-          </p>
-          <button onClick={() => setIsNewRoomModalOpen(true)} className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-md hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5">
-            <Plus className="w-4 h-4" /> Create Encrypted Channel
-          </button>
-        </div>
-      )}
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50">
+            <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-blue-500 shadow-md mb-4">
+              <Lock className="w-8 h-8" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800">No Active Channel</h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-sm mb-4">
+              Create or select a room from the menu to start exchanging encrypted messages.
+            </p>
+            <button onClick={() => setIsNewRoomModalOpen(true)} className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-md hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5">
+              <Plus className="w-4 h-4" /> Create Encrypted Channel
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Floating Mobile Bottom Navigation Bar */}
+      <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-xl border border-slate-800/90 rounded-full shadow-2xl z-40 px-3 py-2 flex items-center justify-around text-slate-400">
+        <button 
+          onClick={() => setIsMobileMenuOpen(true)} 
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isMobileMenuOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+        >
+          <MessageSquare className="w-5 h-5" />
+          <span>Chats</span>
+        </button>
+
+        <button 
+          onClick={() => { 
+            setIsMobileMenuOpen(true); 
+            setTimeout(() => { 
+              document.querySelector('input[placeholder*="Search user"]')?.focus(); 
+            }, 250); 
+          }} 
+          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-white transition-all"
+        >
+          <Search className="w-5 h-5" />
+          <span>Search</span>
+        </button>
+
+        <button 
+          onClick={() => setIsNewRoomModalOpen(true)} 
+          className="w-10 h-10 -mt-5 bg-gradient-to-tr from-pink-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-pink-500/30 active:scale-95 transition-transform"
+          title="Create Room"
+        >
+          <Plus className="w-6 h-6" />
+        </button>
+
+        <button 
+          onClick={() => setIsCryptoModalOpen(true)} 
+          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-pink-400 transition-all"
+        >
+          <Key className="w-5 h-5" />
+          <span>Crypto</span>
+        </button>
+
+        <button 
+          onClick={handleLogout} 
+          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-rose-400 transition-all"
+          title="Sign Out"
+        >
+          <LogOut className="w-5 h-5" />
+          <span>Sign Out</span>
+        </button>
+      </div>
 
       {/* New Room Modal */}
       {isNewRoomModalOpen && (
