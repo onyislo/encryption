@@ -378,3 +378,89 @@ export async function uploadEncryptedAttachment(roomId, encryptedFileBlob, fileN
 
   return urlData.publicUrl;
 }
+
+export async function updateUserPassword(newPassword) {
+  const { data, error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteUserAccount() {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+
+  // Delete profile record which cascades to user_settings, room_participants, etc.
+  const { error: profileError } = await supabase
+    .from('profiles')
+    .delete()
+    .eq('id', user.id);
+  
+  if (profileError) console.warn('Profile deletion notice:', profileError);
+
+  // Sign out user session
+  await supabase.auth.signOut();
+}
+
+/* =====================================================================
+   6. USER SETTINGS QUERIES
+   ===================================================================== */
+
+const DEFAULT_SETTINGS = {
+  dark_mode: false,
+  notifications: true,
+  auto_lock: true,
+  read_receipts: true,
+  message_previews: true,
+  language: 'English (US)',
+};
+
+/**
+ * Fetch the authenticated user's settings from the database.
+ * Returns DEFAULT_SETTINGS if no row exists yet.
+ */
+export async function fetchUserSettings() {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('user_settings')
+    .select('dark_mode, notifications, auto_lock, read_receipts, message_previews, language')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  // Return saved settings or defaults if user hasn't saved yet
+  return data ? { ...DEFAULT_SETTINGS, ...data } : { ...DEFAULT_SETTINGS };
+}
+
+/**
+ * Save (upsert) user settings to the database.
+ * Accepts a partial or full settings object.
+ */
+export async function saveUserSettings(settings) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const payload = {
+    user_id: user.id,
+    dark_mode: settings.dark_mode ?? false,
+    notifications: settings.notifications ?? true,
+    auto_lock: settings.auto_lock ?? true,
+    read_receipts: settings.read_receipts ?? true,
+    message_previews: settings.message_previews ?? true,
+    language: settings.language || 'English (US)',
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from('user_settings')
+    .upsert(payload, { onConflict: 'user_id' })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+

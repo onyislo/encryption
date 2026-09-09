@@ -21,7 +21,11 @@ import {
   fetchRoomMessages, 
   subscribeToMessages,
   searchProfiles,
-  isSupabaseConfigured
+  isSupabaseConfigured,
+  fetchUserSettings,
+  saveUserSettings,
+  updateUserPassword,
+  deleteUserAccount
 } from './lib/supabase';
 
 function App() {
@@ -50,6 +54,31 @@ function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [isCryptoModalOpen, setIsCryptoModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isAppLocked, setIsAppLocked] = useState(false);
+  const [autoLockEnabled, setAutoLockEnabled] = useState(true);
+
+  // Apply dark mode theme class to <html> root element
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  // Handle auto-lock visibility change
+  useEffect(() => {
+    if (!isLoggedIn || !autoLockEnabled) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        setIsAppLocked(true);
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+    return () => window.removeEventListener('visibilitychange', handleVisibility);
+  }, [isLoggedIn, autoLockEnabled]);
 
   const scrollRef = useRef(null);
   const isConfigured = isSupabaseConfigured();
@@ -87,6 +116,15 @@ function App() {
           const username = user.email.split('@')[0];
           setUserProfile({ id: user.id, email: user.email, username });
           setIsLoggedIn(true);
+          try {
+            const settings = await fetchUserSettings();
+            if (settings) {
+              setIsDarkMode(settings.dark_mode ?? false);
+              setAutoLockEnabled(settings.auto_lock ?? true);
+            }
+          } catch (e) {
+            console.warn("Initial settings fetch error:", e);
+          }
           await loadUserRooms();
         }
       } catch (err) {
@@ -388,10 +426,30 @@ function App() {
     return <LoginScreen onAuthSubmit={handleAuthSubmit} authError={authError} authSuccess={authSuccess} authLoading={authLoading} />;
   }
 
+  if (isAppLocked) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center font-sans">
+        <div className="w-20 h-20 rounded-3xl bg-pink-500/10 border border-pink-500/30 flex items-center justify-center text-pink-400 mb-6 shadow-xl shadow-pink-500/10 animate-pulse">
+          <Lock className="w-10 h-10" />
+        </div>
+        <h2 className="text-2xl font-extrabold text-white mb-2">SecureChat Locked</h2>
+        <p className="text-xs text-slate-400 max-w-xs mb-8 leading-relaxed">
+          Auto-lock is enabled and was triggered when switching tabs or leaving the screen.
+        </p>
+        <button
+          onClick={() => setIsAppLocked(false)}
+          className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-blue-500 text-white font-bold text-sm shadow-lg shadow-pink-500/25 hover:opacity-95 active:scale-95 transition-all"
+        >
+          Unlock Application
+        </button>
+      </div>
+    );
+  }
+
   const activeChat = chats[activeChatId];
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors">
       {/* Settings Page Overlay */}
       {isSettingsOpen && (
         <SettingsPage
@@ -399,6 +457,11 @@ function App() {
           publicKeyPem={publicKeyPem}
           onClose={() => setIsSettingsOpen(false)}
           onLogout={handleLogout}
+          onUpdateProfile={(newProf) => setUserProfile(newProf)}
+          onToggleDarkMode={(val) => setIsDarkMode(val)}
+          onToggleAutoLock={(val) => setAutoLockEnabled(val)}
+          chats={chats}
+          clearCache={() => setChats({})}
         />
       )}
 
@@ -564,14 +627,6 @@ function App() {
             <Shield className="w-5 h-5 text-pink-400" />
             <span className="font-bold text-sm bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-blue-400">SecureChat</span>
           </div>
-
-          <button 
-            onClick={() => setIsCryptoModalOpen(true)} 
-            className="p-1.5 rounded-xl bg-slate-800 border border-slate-700 text-pink-400 hover:text-white transition-colors"
-            title="Crypto Guide"
-          >
-            <Key className="w-4 h-4" />
-          </button>
         </div>
 
         {activeChat ? (
@@ -595,13 +650,6 @@ function App() {
                  </div>
               </div>
               <div className="flex items-center gap-2 md:gap-3">
-                 <button 
-                   onClick={() => setIsCryptoModalOpen(true)} 
-                   className="hidden sm:flex px-3 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-all bg-slate-900 text-pink-400 border border-slate-700 hover:bg-slate-800"
-                 >
-                   <Key className="w-3.5 h-3.5 text-pink-400" />
-                   Crypto Tool
-                 </button>
                  <button onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${activeTab === 'raw' ? 'bg-pink-50 text-pink-600 border-pink-200 shadow-2xs' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                    <Lock className="w-3.5 h-3.5" />
                    {activeTab === 'raw' ? 'Raw Cipher' : 'Decoded'}
@@ -1128,12 +1176,196 @@ function UnconfiguredScreen() {
   );
 }
 
-function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
+function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdateProfile, onToggleDarkMode, onToggleAutoLock, chats, clearCache }) {
   const [darkMode, setDarkMode] = useState(false);
   const [notifications, setNotifications] = useState(true);
   const [autoLock, setAutoLock] = useState(true);
   const [readReceipts, setReadReceipts] = useState(true);
+  const [messagePreviews, setMessagePreviews] = useState(true);
+  const [language, setLanguage] = useState('English (US)');
+  
   const [showKeyInfo, setShowKeyInfo] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [savingStatus, setSavingStatus] = useState(''); // '', 'saving', 'saved', 'error'
+  const [toastMessage, setToastMessage] = useState('');
+
+  // Modals state
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
+  const [editUsername, setEditUsername] = useState(userProfile?.username || '');
+  const [editProfileLoading, setEditProfileLoading] = useState(false);
+  const [editProfileError, setEditProfileError] = useState('');
+
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState('');
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState('');
+
+  const [isLanguageOpen, setIsLanguageOpen] = useState(false);
+  const [isStorageOpen, setIsStorageOpen] = useState(false);
+
+  const [isDeleteAccountOpen, setIsDeleteAccountOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(''), 3000);
+  };
+
+  // Load settings from Supabase on mount
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const settings = await fetchUserSettings();
+        setDarkMode(settings.dark_mode ?? false);
+        setNotifications(settings.notifications ?? true);
+        setAutoLock(settings.auto_lock ?? true);
+        setReadReceipts(settings.read_receipts ?? true);
+        setMessagePreviews(settings.message_previews ?? true);
+        setLanguage(settings.language || 'English (US)');
+
+        if (onToggleDarkMode) onToggleDarkMode(settings.dark_mode ?? false);
+        if (onToggleAutoLock) onToggleAutoLock(settings.auto_lock ?? true);
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+      } finally {
+        setSettingsLoading(false);
+      }
+    }
+    loadSettings();
+  }, []);
+
+  // Persist a settings change to Supabase
+  const persistSettings = async (newSettings) => {
+    setSavingStatus('saving');
+    try {
+      await saveUserSettings(newSettings);
+      setSavingStatus('saved');
+      setTimeout(() => setSavingStatus(''), 1500);
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+      setSavingStatus('error');
+      setTimeout(() => setSavingStatus(''), 2500);
+    }
+  };
+
+  const handleToggle = (key, currentValue, setter) => {
+    const newValue = !currentValue;
+    setter(newValue);
+
+    if (key === 'dark_mode' && onToggleDarkMode) onToggleDarkMode(newValue);
+    if (key === 'auto_lock' && onToggleAutoLock) onToggleAutoLock(newValue);
+    if (key === 'notifications' && newValue) {
+      if ('Notification' in window && Notification.permission !== 'granted') {
+        Notification.requestPermission();
+      }
+    }
+
+    const newSettings = {
+      dark_mode: key === 'dark_mode' ? newValue : darkMode,
+      notifications: key === 'notifications' ? newValue : notifications,
+      auto_lock: key === 'auto_lock' ? newValue : autoLock,
+      read_receipts: key === 'read_receipts' ? newValue : readReceipts,
+      message_previews: key === 'message_previews' ? newValue : messagePreviews,
+      language: language,
+    };
+    persistSettings(newSettings);
+  };
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    if (!editUsername.trim()) return;
+    setEditProfileLoading(true);
+    setEditProfileError('');
+    try {
+      const updated = await updateProfile(editUsername.trim());
+      if (onUpdateProfile) {
+        onUpdateProfile({ ...userProfile, username: editUsername.trim() });
+      }
+      setIsEditProfileOpen(false);
+      showToast('Profile updated successfully!');
+    } catch (err) {
+      setEditProfileError(err.message || 'Failed to update profile.');
+    } finally {
+      setEditProfileLoading(false);
+    }
+  };
+
+  const handleChangePasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      setChangePasswordError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setChangePasswordError('Passwords do not match.');
+      return;
+    }
+    setChangePasswordLoading(true);
+    setChangePasswordError('');
+    try {
+      await updateUserPassword(newPassword);
+      setChangePasswordSuccess('Password updated successfully!');
+      setTimeout(() => {
+        setIsChangePasswordOpen(false);
+        setNewPassword('');
+        setConfirmPassword('');
+        setChangePasswordSuccess('');
+      }, 1500);
+    } catch (err) {
+      setChangePasswordError(err.message || 'Failed to change password.');
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  };
+
+  const handleSelectLanguage = (lang) => {
+    setLanguage(lang);
+    setIsLanguageOpen(false);
+    persistSettings({
+      dark_mode: darkMode,
+      notifications: notifications,
+      auto_lock: autoLock,
+      read_receipts: readReceipts,
+      message_previews: messagePreviews,
+      language: lang,
+    });
+    showToast(`Language changed to ${lang}`);
+  };
+
+  const handleClearMessageCache = () => {
+    if (clearCache) clearCache();
+    showToast('Decrypted message cache cleared successfully!');
+  };
+
+  const handleDeleteAccountSubmit = async (e) => {
+    e.preventDefault();
+    if (deleteConfirmText.trim().toUpperCase() !== 'DELETE') {
+      setDeleteError('Please type DELETE to confirm account deletion.');
+      return;
+    }
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      await deleteUserAccount();
+      if (onLogout) onLogout();
+    } catch (err) {
+      setDeleteError(err.message || 'Failed to delete account.');
+      setDeleteLoading(false);
+    }
+  };
+
+  // Calculate local storage estimate
+  const totalChannelsCount = chats ? Object.keys(chats).length : 0;
+  let totalMessagesCount = 0;
+  if (chats) {
+    Object.values(chats).forEach(c => {
+      if (c.messages) totalMessagesCount += c.messages.length;
+    });
+  }
 
   const ToggleSwitch = ({ enabled, onToggle }) => (
     <button
@@ -1142,7 +1374,7 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
       className={`relative w-11 h-6 rounded-full transition-all duration-300 flex-shrink-0 ${
         enabled
           ? 'bg-gradient-to-r from-pink-500 to-blue-500 shadow-md shadow-pink-500/20'
-          : 'bg-slate-300'
+          : 'bg-slate-300 dark:bg-slate-700'
       }`}
     >
       <span
@@ -1157,63 +1389,96 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
     <div
       onClick={onClick}
       className={`flex items-center justify-between py-3.5 px-1 ${
-        onClick ? 'cursor-pointer active:bg-slate-50 rounded-xl transition-colors' : ''
+        onClick ? 'cursor-pointer active:bg-slate-50 dark:active:bg-slate-800/60 rounded-xl transition-colors' : ''
       } ${danger ? 'group' : ''}`}
     >
       <div className="flex items-center gap-3 min-w-0">
         <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
           danger
-            ? 'bg-rose-50 text-rose-500 border border-rose-100'
-            : `${iconColor || 'bg-slate-100 text-slate-500'}`
+            ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-500 border border-rose-100 dark:border-rose-900/50'
+            : `${iconColor || 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'}`
         }`}>
           {icon}
         </div>
         <div className="min-w-0">
           <div className={`text-sm font-semibold ${
-            danger ? 'text-rose-600 group-hover:text-rose-700' : 'text-slate-800'
+            danger ? 'text-rose-600 dark:text-rose-400 group-hover:text-rose-700' : 'text-slate-800 dark:text-slate-100'
           }`}>{title}</div>
-          {subtitle && <div className="text-[11px] text-slate-400 mt-0.5 truncate">{subtitle}</div>}
+          {subtitle && <div className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 truncate">{subtitle}</div>}
         </div>
       </div>
       <div className="flex-shrink-0 ml-3">
-        {right || (onClick && !danger && <ChevronRight className="w-4 h-4 text-slate-300" />)}
+        {right || (onClick && !danger && <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600" />)}
       </div>
     </div>
   );
 
   const SectionLabel = ({ children }) => (
-    <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase px-1 pt-6 pb-2">{children}</div>
+    <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 tracking-wider uppercase px-1 pt-6 pb-2">{children}</div>
   );
 
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-50 overflow-y-auto">
+    <div className="fixed inset-0 z-[60] bg-slate-50 dark:bg-slate-950 dark:text-slate-100 overflow-y-auto font-sans transition-colors">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white dark:bg-white dark:text-slate-900 text-xs font-bold px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-top-4">
+          <Check className="w-4 h-4 text-emerald-400 dark:text-emerald-600" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-xl border-b border-slate-200">
+      <div className="sticky top-0 z-10 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-lg mx-auto flex items-center justify-between px-4 py-3.5">
           <button
             onClick={onClose}
-            className="p-2 -ml-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+            className="p-2 -ml-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-base font-bold text-slate-800">Settings</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-base font-bold text-slate-800 dark:text-white">Settings</h1>
+            {savingStatus === 'saving' && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-blue-500 animate-pulse">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Syncing…
+              </span>
+            )}
+            {savingStatus === 'saved' && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
+                <Check className="w-3 h-3" /> Saved to Supabase
+              </span>
+            )}
+            {savingStatus === 'error' && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-500">
+                <AlertTriangle className="w-3 h-3" /> Save failed
+              </span>
+            )}
+          </div>
           <div className="w-9" />
         </div>
       </div>
 
       <div className="max-w-lg mx-auto px-5 pb-32">
+        {/* Loading State */}
+        {settingsLoading ? (
+          <div className="mt-16 flex flex-col items-center gap-3">
+            <RefreshCw className="w-6 h-6 text-pink-400 animate-spin" />
+            <span className="text-xs font-semibold text-slate-400">Loading settings from Supabase…</span>
+          </div>
+        ) : (
+        <>
         {/* Profile Card */}
-        <div className="mt-6 bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+        <div className="mt-6 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm p-5">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white flex items-center justify-center font-bold text-xl shadow-lg shadow-blue-500/20 flex-shrink-0">
               {userProfile?.username?.substring(0, 2).toUpperCase() || 'US'}
             </div>
             <div className="min-w-0">
-              <div className="text-lg font-bold text-slate-800 truncate">@{userProfile?.username}</div>
-              <div className="text-xs text-slate-400 truncate">{userProfile?.email}</div>
+              <div className="text-lg font-bold text-slate-800 dark:text-white truncate">@{userProfile?.username}</div>
+              <div className="text-xs text-slate-400 dark:text-slate-500 truncate">{userProfile?.email}</div>
               <div className="flex items-center gap-1.5 mt-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[11px] font-semibold text-emerald-600">Online · Encrypted</span>
+                <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Online · Encrypted</span>
               </div>
             </div>
           </div>
@@ -1221,47 +1486,60 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
 
         {/* Account Section */}
         <SectionLabel>Account</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={<User className="w-4 h-4" />}
-            iconColor="bg-blue-50 text-blue-500 border border-blue-100"
+            iconColor="bg-blue-50 dark:bg-blue-950/40 text-blue-500 border border-blue-100 dark:border-blue-900/50"
             title="Edit Profile"
-            subtitle="Change your username and avatar"
+            subtitle={`Username: @${userProfile?.username || ''}`}
+            onClick={() => {
+              setEditUsername(userProfile?.username || '');
+              setEditProfileError('');
+              setIsEditProfileOpen(true);
+            }}
           />
           <SettingsRow
             icon={<Lock className="w-4 h-4" />}
-            iconColor="bg-violet-50 text-violet-500 border border-violet-100"
+            iconColor="bg-violet-50 dark:bg-violet-950/40 text-violet-500 border border-violet-100 dark:border-violet-900/50"
             title="Change Password"
             subtitle="Update your account password"
+            onClick={() => {
+              setNewPassword('');
+              setConfirmPassword('');
+              setChangePasswordError('');
+              setChangePasswordSuccess('');
+              setIsChangePasswordOpen(true);
+            }}
           />
           <SettingsRow
             icon={<Globe className="w-4 h-4" />}
-            iconColor="bg-cyan-50 text-cyan-500 border border-cyan-100"
+            iconColor="bg-cyan-50 dark:bg-cyan-950/40 text-cyan-500 border border-cyan-100 dark:border-cyan-900/50"
             title="Language"
-            subtitle="English (US)"
+            subtitle={language}
+            onClick={() => setIsLanguageOpen(true)}
           />
         </div>
 
         {/* Privacy & Security Section */}
         <SectionLabel>Privacy & Security</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={<Fingerprint className="w-4 h-4" />}
-            iconColor="bg-pink-50 text-pink-500 border border-pink-100"
+            iconColor="bg-pink-50 dark:bg-pink-950/40 text-pink-500 border border-pink-100 dark:border-pink-900/50"
             title="Auto-Lock"
-            subtitle="Lock app when switching tabs"
-            right={<ToggleSwitch enabled={autoLock} onToggle={() => setAutoLock(!autoLock)} />}
+            subtitle={autoLock ? "App locks automatically when switching tabs" : "Auto-lock disabled"}
+            right={<ToggleSwitch enabled={autoLock} onToggle={() => handleToggle('auto_lock', autoLock, setAutoLock)} />}
           />
           <SettingsRow
             icon={<Eye className="w-4 h-4" />}
-            iconColor="bg-amber-50 text-amber-500 border border-amber-100"
+            iconColor="bg-amber-50 dark:bg-amber-950/40 text-amber-500 border border-amber-100 dark:border-amber-900/50"
             title="Read Receipts"
-            subtitle="Let others know when you've read messages"
-            right={<ToggleSwitch enabled={readReceipts} onToggle={() => setReadReceipts(!readReceipts)} />}
+            subtitle={readReceipts ? "Others can see when you've read messages" : "Read receipts hidden"}
+            right={<ToggleSwitch enabled={readReceipts} onToggle={() => handleToggle('read_receipts', readReceipts, setReadReceipts)} />}
           />
           <SettingsRow
             icon={<Key className="w-4 h-4" />}
-            iconColor="bg-emerald-50 text-emerald-500 border border-emerald-100"
+            iconColor="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-500 border border-emerald-100 dark:border-emerald-900/50"
             title="Encryption Keys"
             subtitle="View your RSA-2048 public key"
             onClick={() => setShowKeyInfo(!showKeyInfo)}
@@ -1282,6 +1560,7 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
               onClick={() => {
                 if (publicKeyPem) {
                   navigator.clipboard.writeText(publicKeyPem);
+                  showToast('Public key copied to clipboard!');
                 }
               }}
               className="mt-3 w-full py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 flex items-center justify-center gap-1.5 hover:bg-slate-700 transition-colors"
@@ -1293,57 +1572,60 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
 
         {/* Notifications Section */}
         <SectionLabel>Notifications</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={<Bell className="w-4 h-4" />}
-            iconColor="bg-orange-50 text-orange-500 border border-orange-100"
+            iconColor="bg-orange-50 dark:bg-orange-950/40 text-orange-500 border border-orange-100 dark:border-orange-900/50"
             title="Push Notifications"
-            subtitle="Get notified for new messages"
-            right={<ToggleSwitch enabled={notifications} onToggle={() => setNotifications(!notifications)} />}
+            subtitle={notifications ? "Get notified for new messages" : "Notifications disabled"}
+            right={<ToggleSwitch enabled={notifications} onToggle={() => handleToggle('notifications', notifications, setNotifications)} />}
           />
           <SettingsRow
             icon={<MessageSquare className="w-4 h-4" />}
-            iconColor="bg-teal-50 text-teal-500 border border-teal-100"
+            iconColor="bg-teal-50 dark:bg-teal-950/40 text-teal-500 border border-teal-100 dark:border-teal-900/50"
             title="Message Previews"
-            subtitle="Show message content in notifications"
+            subtitle={messagePreviews ? "Show message content in notification banners" : "Content hidden in notifications"}
+            right={<ToggleSwitch enabled={messagePreviews} onToggle={() => handleToggle('message_previews', messagePreviews, setMessagePreviews)} />}
           />
         </div>
 
         {/* Appearance Section */}
         <SectionLabel>Appearance</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={darkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             iconColor={darkMode
-              ? 'bg-indigo-50 text-indigo-500 border border-indigo-100'
-              : 'bg-yellow-50 text-yellow-500 border border-yellow-100'
+              ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-500 border border-indigo-100 dark:border-indigo-900/50'
+              : 'bg-yellow-50 dark:bg-yellow-950/40 text-yellow-500 border border-yellow-100 dark:border-yellow-900/50'
             }
             title="Dark Mode"
             subtitle={darkMode ? 'Dark theme active' : 'Light theme active'}
-            right={<ToggleSwitch enabled={darkMode} onToggle={() => setDarkMode(!darkMode)} />}
+            right={<ToggleSwitch enabled={darkMode} onToggle={() => handleToggle('dark_mode', darkMode, setDarkMode)} />}
           />
         </div>
 
         {/* Storage Section */}
         <SectionLabel>Storage & Data</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={<HardDrive className="w-4 h-4" />}
-            iconColor="bg-slate-100 text-slate-500 border border-slate-200"
+            iconColor="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
             title="Storage Usage"
-            subtitle="Encrypted messages & attachments"
+            subtitle={`${totalChannelsCount} active channels · ${totalMessagesCount} cached messages`}
+            onClick={() => setIsStorageOpen(true)}
           />
           <SettingsRow
             icon={<Database className="w-4 h-4" />}
-            iconColor="bg-sky-50 text-sky-500 border border-sky-100"
+            iconColor="bg-sky-50 dark:bg-sky-950/40 text-sky-500 border border-sky-100 dark:border-sky-900/50"
             title="Clear Message Cache"
             subtitle="Remove locally cached decrypted messages"
+            onClick={handleClearMessageCache}
           />
         </div>
 
         {/* Danger Zone */}
         <SectionLabel>Danger Zone</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={<LogOut className="w-4 h-4" />}
             danger
@@ -1355,40 +1637,287 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
             icon={<Trash2 className="w-4 h-4" />}
             danger
             title="Delete Account"
-            subtitle="Permanently delete your account and data"
+            subtitle="Permanently delete your account and data from Supabase"
             onClick={() => {
-              if (window.confirm('Are you sure you want to delete your account? This action cannot be undone.')) {
-                // Account deletion logic placeholder
-              }
+              setDeleteConfirmText('');
+              setDeleteError('');
+              setIsDeleteAccountOpen(true);
             }}
           />
         </div>
 
         {/* About Section */}
         <SectionLabel>About</SectionLabel>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 pb-2 divide-y divide-slate-100">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm px-4 pb-2 divide-y divide-slate-100 dark:divide-slate-800">
           <SettingsRow
             icon={<Shield className="w-4 h-4" />}
-            iconColor="bg-gradient-to-tr from-pink-50 to-blue-50 text-pink-500 border border-pink-100"
+            iconColor="bg-gradient-to-tr from-pink-50 to-blue-50 text-pink-500 border border-pink-100 dark:border-pink-900/50"
             title="SecureChat Pro"
             subtitle="Version 1.0.0 · E2E Encrypted"
           />
           <div className="py-4 text-center">
-            <p className="text-[11px] text-slate-400 leading-relaxed">
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed">
               Built with RSA-2048 & AES-GCM encryption.<br />
               Your messages are encrypted end-to-end.<br />
               No one, not even us, can read them.
             </p>
             <div className="flex items-center justify-center gap-1.5 mt-3">
               <Lock className="w-3 h-3 text-emerald-500" />
-              <span className="text-[10px] font-bold text-emerald-600">Zero-Knowledge Architecture</span>
+              <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Zero-Knowledge Architecture</span>
             </div>
           </div>
         </div>
 
         {/* Bottom Spacing */}
         <div className="h-8" />
+        </>
+        )}
       </div>
+
+      {/* EDIT PROFILE MODAL */}
+      {isEditProfileOpen && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <User className="w-4 h-4 text-blue-500" /> Edit Profile
+              </h3>
+              <button onClick={() => setIsEditProfileOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveProfile} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Username</label>
+                <input
+                  type="text"
+                  value={editUsername}
+                  onChange={(e) => setEditUsername(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-sm text-slate-800 dark:text-white focus:outline-none focus:border-blue-500"
+                  placeholder="Enter new username"
+                  required
+                />
+              </div>
+              {editProfileError && (
+                <div className="text-xs text-rose-500 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50">
+                  {editProfileError}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditProfileOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editProfileLoading}
+                  className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md transition-all disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {editProfileLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  Save Profile
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CHANGE PASSWORD MODAL */}
+      {isChangePasswordOpen && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <Lock className="w-4 h-4 text-violet-500" /> Change Password
+              </h3>
+              <button onClick={() => setIsChangePasswordOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleChangePasswordSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">New Password</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-sm text-slate-800 dark:text-white focus:outline-none focus:border-violet-500"
+                  placeholder="Min 6 characters"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-sm text-slate-800 dark:text-white focus:outline-none focus:border-violet-500"
+                  placeholder="Re-enter new password"
+                  required
+                />
+              </div>
+              {changePasswordError && (
+                <div className="text-xs text-rose-500 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50">
+                  {changePasswordError}
+                </div>
+              )}
+              {changePasswordSuccess && (
+                <div className="text-xs text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 p-2.5 rounded-xl border border-emerald-200 dark:border-emerald-900/50 flex items-center gap-1.5 font-semibold">
+                  <Check className="w-4 h-4 text-emerald-500" /> {changePasswordSuccess}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsChangePasswordOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={changePasswordLoading}
+                  className="px-5 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-xl shadow-md transition-all disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {changePasswordLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Lock className="w-3.5 h-3.5" />}
+                  Update Password
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* LANGUAGE SELECTOR MODAL */}
+      {isLanguageOpen && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <Globe className="w-4 h-4 text-cyan-500" /> Select Language
+              </h3>
+              <button onClick={() => setIsLanguageOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {['English (US)', 'Spanish (Español)', 'French (Français)', 'German (Deutsch)'].map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => handleSelectLanguage(lang)}
+                  className={`w-full py-3 px-4 rounded-xl text-left text-sm font-semibold flex items-center justify-between transition-colors ${
+                    language === lang
+                      ? 'bg-cyan-50 dark:bg-cyan-950/50 text-cyan-600 dark:text-cyan-400 border border-cyan-200 dark:border-cyan-800'
+                      : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <span>{lang}</span>
+                  {language === lang && <Check className="w-4 h-4 text-cyan-500" />}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STORAGE BREAKDOWN MODAL */}
+      {isStorageOpen && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <HardDrive className="w-4 h-4 text-slate-500" /> Storage Usage
+              </h3>
+              <button onClick={() => setIsStorageOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3 font-sans text-xs">
+              <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                <span className="text-slate-600 dark:text-slate-400">Active Chat Channels</span>
+                <span className="font-bold text-slate-800 dark:text-white">{totalChannelsCount}</span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                <span className="text-slate-600 dark:text-slate-400">Cached Decrypted Messages</span>
+                <span className="font-bold text-slate-800 dark:text-white">{totalMessagesCount}</span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                <span className="text-slate-600 dark:text-slate-400">RSA-2048 Key Storage</span>
+                <span className="font-bold text-emerald-500">2.4 KB (SPKI Base64)</span>
+              </div>
+              <div className="p-3 bg-pink-50 dark:bg-pink-950/40 rounded-xl border border-pink-200 dark:border-pink-900/50 text-[11px] text-pink-600 dark:text-pink-300">
+                End-to-End encrypted data is stored locally in your browser memory and securely in Supabase Postgres.
+              </div>
+            </div>
+            <button
+              onClick={() => setIsStorageOpen(false)}
+              className="mt-4 w-full py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-slate-700 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE ACCOUNT MODAL */}
+      {isDeleteAccountOpen && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-rose-600 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-500" /> Delete Account
+              </h3>
+              <button onClick={() => setIsDeleteAccountOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+              This action is <strong className="text-rose-500">permanent and irreversible</strong>. All your profiles, encryption keys, settings, and participation in rooms will be deleted from Supabase.
+            </p>
+            <form onSubmit={handleDeleteAccountSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Type <span className="text-rose-500 font-mono">DELETE</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-rose-200 dark:border-rose-900/50 text-sm text-slate-800 dark:text-white focus:outline-none focus:border-rose-500 font-mono"
+                  placeholder="DELETE"
+                  required
+                />
+              </div>
+              {deleteError && (
+                <div className="text-xs text-rose-500 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50">
+                  {deleteError}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteAccountOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={deleteLoading}
+                  className="px-5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md transition-all disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {deleteLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  Delete Account
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

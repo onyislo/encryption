@@ -12,6 +12,7 @@
 DROP TRIGGER  IF EXISTS on_auth_user_created     ON auth.users;
 DROP FUNCTION IF EXISTS public.handle_new_user();
 
+DROP TABLE IF EXISTS public.user_settings        CASCADE;
 DROP TABLE IF EXISTS public.messages             CASCADE;
 DROP TABLE IF EXISTS public.room_participants    CASCADE;
 DROP TABLE IF EXISTS public.rooms               CASCADE;
@@ -61,6 +62,18 @@ CREATE TABLE public.messages (
     sender_id         UUID NOT NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
     encrypted_content TEXT NOT NULL,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+-- 2e. User Settings (persistent preferences)
+CREATE TABLE public.user_settings (
+    user_id          UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+    dark_mode        BOOLEAN NOT NULL DEFAULT false,
+    notifications    BOOLEAN NOT NULL DEFAULT true,
+    auto_lock        BOOLEAN NOT NULL DEFAULT true,
+    read_receipts    BOOLEAN NOT NULL DEFAULT true,
+    message_previews BOOLEAN NOT NULL DEFAULT true,
+    language         VARCHAR(50) NOT NULL DEFAULT 'English (US)',
+    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 
@@ -114,6 +127,7 @@ ALTER TABLE public.profiles          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rooms             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.room_participants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_settings     ENABLE ROW LEVEL SECURITY;
 
 
 -- =====================================================================
@@ -189,6 +203,20 @@ WITH CHECK (
           AND room_participants.user_id = auth.uid()
     )
 );
+
+-- USER SETTINGS --
+CREATE POLICY "user_settings_select"
+ON public.user_settings FOR SELECT TO authenticated
+USING (auth.uid() = user_id);
+
+CREATE POLICY "user_settings_insert"
+ON public.user_settings FOR INSERT TO authenticated
+WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "user_settings_update"
+ON public.user_settings FOR UPDATE TO authenticated
+USING  (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
 
 
 -- =====================================================================
