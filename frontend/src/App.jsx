@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Shield, Lock, User, Eye, EyeOff, Search, Plus, MessageSquare, 
   ChevronLeft, Phone, Video, MoreVertical, Paperclip, Smile, 
-  Send, Info, Check, Copy, Settings, Menu, LogOut, RefreshCw, X, AlertTriangle, Key, UserPlus
+  Send, Info, Check, Copy, Settings, Menu, LogOut, RefreshCw, X, AlertTriangle, Key, UserPlus,
+  Bell, Moon, Sun, Database, Trash2, ChevronRight, Fingerprint, Globe, HardDrive
 } from 'lucide-react';
 import { generateKeyPair, exportPublicKey, encryptMessage, decryptMessage } from './utils/crypto';
 import { 
@@ -48,6 +49,7 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isCryptoModalOpen, setIsCryptoModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const scrollRef = useRef(null);
   const isConfigured = isSupabaseConfigured();
@@ -390,6 +392,16 @@ function App() {
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
+      {/* Settings Page Overlay */}
+      {isSettingsOpen && (
+        <SettingsPage
+          userProfile={userProfile}
+          publicKeyPem={publicKeyPem}
+          onClose={() => setIsSettingsOpen(false)}
+          onLogout={handleLogout}
+        />
+      )}
+
       {/* Mobile Overlay */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setIsMobileMenuOpen(false)} />
@@ -746,12 +758,12 @@ function App() {
         </button>
 
         <button 
-          onClick={handleLogout} 
-          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-rose-400 transition-all"
-          title="Sign Out"
+          onClick={() => setIsSettingsOpen(true)} 
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSettingsOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+          title="Settings"
         >
-          <LogOut className="w-5 h-5" />
-          <span>Sign Out</span>
+          <Settings className="w-5 h-5" />
+          <span>Settings</span>
         </button>
       </div>
 
@@ -1111,6 +1123,271 @@ function UnconfiguredScreen() {
         <p className="text-[11px] text-slate-500">
           Supported variable names: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY.
         </p>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout }) {
+  const [darkMode, setDarkMode] = useState(false);
+  const [notifications, setNotifications] = useState(true);
+  const [autoLock, setAutoLock] = useState(true);
+  const [readReceipts, setReadReceipts] = useState(true);
+  const [showKeyInfo, setShowKeyInfo] = useState(false);
+
+  const ToggleSwitch = ({ enabled, onToggle }) => (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`relative w-11 h-6 rounded-full transition-all duration-300 flex-shrink-0 ${
+        enabled
+          ? 'bg-gradient-to-r from-pink-500 to-blue-500 shadow-md shadow-pink-500/20'
+          : 'bg-slate-300'
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-300 ${
+          enabled ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
+    </button>
+  );
+
+  const SettingsRow = ({ icon, iconColor, title, subtitle, right, onClick, danger }) => (
+    <div
+      onClick={onClick}
+      className={`flex items-center justify-between py-3.5 px-1 ${
+        onClick ? 'cursor-pointer active:bg-slate-50 rounded-xl transition-colors' : ''
+      } ${danger ? 'group' : ''}`}
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+          danger
+            ? 'bg-rose-50 text-rose-500 border border-rose-100'
+            : `${iconColor || 'bg-slate-100 text-slate-500'}`
+        }`}>
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <div className={`text-sm font-semibold ${
+            danger ? 'text-rose-600 group-hover:text-rose-700' : 'text-slate-800'
+          }`}>{title}</div>
+          {subtitle && <div className="text-[11px] text-slate-400 mt-0.5 truncate">{subtitle}</div>}
+        </div>
+      </div>
+      <div className="flex-shrink-0 ml-3">
+        {right || (onClick && !danger && <ChevronRight className="w-4 h-4 text-slate-300" />)}
+      </div>
+    </div>
+  );
+
+  const SectionLabel = ({ children }) => (
+    <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase px-1 pt-6 pb-2">{children}</div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-slate-50 overflow-y-auto">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-xl border-b border-slate-200">
+        <div className="max-w-lg mx-auto flex items-center justify-between px-4 py-3.5">
+          <button
+            onClick={onClose}
+            className="p-2 -ml-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <h1 className="text-base font-bold text-slate-800">Settings</h1>
+          <div className="w-9" />
+        </div>
+      </div>
+
+      <div className="max-w-lg mx-auto px-5 pb-32">
+        {/* Profile Card */}
+        <div className="mt-6 bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white flex items-center justify-center font-bold text-xl shadow-lg shadow-blue-500/20 flex-shrink-0">
+              {userProfile?.username?.substring(0, 2).toUpperCase() || 'US'}
+            </div>
+            <div className="min-w-0">
+              <div className="text-lg font-bold text-slate-800 truncate">@{userProfile?.username}</div>
+              <div className="text-xs text-slate-400 truncate">{userProfile?.email}</div>
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[11px] font-semibold text-emerald-600">Online · Encrypted</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Account Section */}
+        <SectionLabel>Account</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+          <SettingsRow
+            icon={<User className="w-4 h-4" />}
+            iconColor="bg-blue-50 text-blue-500 border border-blue-100"
+            title="Edit Profile"
+            subtitle="Change your username and avatar"
+          />
+          <SettingsRow
+            icon={<Lock className="w-4 h-4" />}
+            iconColor="bg-violet-50 text-violet-500 border border-violet-100"
+            title="Change Password"
+            subtitle="Update your account password"
+          />
+          <SettingsRow
+            icon={<Globe className="w-4 h-4" />}
+            iconColor="bg-cyan-50 text-cyan-500 border border-cyan-100"
+            title="Language"
+            subtitle="English (US)"
+          />
+        </div>
+
+        {/* Privacy & Security Section */}
+        <SectionLabel>Privacy & Security</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+          <SettingsRow
+            icon={<Fingerprint className="w-4 h-4" />}
+            iconColor="bg-pink-50 text-pink-500 border border-pink-100"
+            title="Auto-Lock"
+            subtitle="Lock app when switching tabs"
+            right={<ToggleSwitch enabled={autoLock} onToggle={() => setAutoLock(!autoLock)} />}
+          />
+          <SettingsRow
+            icon={<Eye className="w-4 h-4" />}
+            iconColor="bg-amber-50 text-amber-500 border border-amber-100"
+            title="Read Receipts"
+            subtitle="Let others know when you've read messages"
+            right={<ToggleSwitch enabled={readReceipts} onToggle={() => setReadReceipts(!readReceipts)} />}
+          />
+          <SettingsRow
+            icon={<Key className="w-4 h-4" />}
+            iconColor="bg-emerald-50 text-emerald-500 border border-emerald-100"
+            title="Encryption Keys"
+            subtitle="View your RSA-2048 public key"
+            onClick={() => setShowKeyInfo(!showKeyInfo)}
+          />
+        </div>
+
+        {/* Public Key Reveal */}
+        {showKeyInfo && (
+          <div className="mt-3 bg-slate-900 border border-slate-700 rounded-2xl p-4 shadow-lg animate-in">
+            <div className="flex items-center gap-2 mb-2">
+              <Key className="w-4 h-4 text-pink-400" />
+              <span className="text-xs font-bold text-slate-200">Your RSA-2048 Public Key</span>
+            </div>
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[10px] text-emerald-400 break-all max-h-28 overflow-y-auto leading-relaxed">
+              {publicKeyPem || 'Key not yet generated...'}
+            </div>
+            <button
+              onClick={() => {
+                if (publicKeyPem) {
+                  navigator.clipboard.writeText(publicKeyPem);
+                }
+              }}
+              className="mt-3 w-full py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 flex items-center justify-center gap-1.5 hover:bg-slate-700 transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5 text-pink-400" /> Copy Public Key
+            </button>
+          </div>
+        )}
+
+        {/* Notifications Section */}
+        <SectionLabel>Notifications</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+          <SettingsRow
+            icon={<Bell className="w-4 h-4" />}
+            iconColor="bg-orange-50 text-orange-500 border border-orange-100"
+            title="Push Notifications"
+            subtitle="Get notified for new messages"
+            right={<ToggleSwitch enabled={notifications} onToggle={() => setNotifications(!notifications)} />}
+          />
+          <SettingsRow
+            icon={<MessageSquare className="w-4 h-4" />}
+            iconColor="bg-teal-50 text-teal-500 border border-teal-100"
+            title="Message Previews"
+            subtitle="Show message content in notifications"
+          />
+        </div>
+
+        {/* Appearance Section */}
+        <SectionLabel>Appearance</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+          <SettingsRow
+            icon={darkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            iconColor={darkMode
+              ? 'bg-indigo-50 text-indigo-500 border border-indigo-100'
+              : 'bg-yellow-50 text-yellow-500 border border-yellow-100'
+            }
+            title="Dark Mode"
+            subtitle={darkMode ? 'Dark theme active' : 'Light theme active'}
+            right={<ToggleSwitch enabled={darkMode} onToggle={() => setDarkMode(!darkMode)} />}
+          />
+        </div>
+
+        {/* Storage Section */}
+        <SectionLabel>Storage & Data</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+          <SettingsRow
+            icon={<HardDrive className="w-4 h-4" />}
+            iconColor="bg-slate-100 text-slate-500 border border-slate-200"
+            title="Storage Usage"
+            subtitle="Encrypted messages & attachments"
+          />
+          <SettingsRow
+            icon={<Database className="w-4 h-4" />}
+            iconColor="bg-sky-50 text-sky-500 border border-sky-100"
+            title="Clear Message Cache"
+            subtitle="Remove locally cached decrypted messages"
+          />
+        </div>
+
+        {/* Danger Zone */}
+        <SectionLabel>Danger Zone</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 divide-y divide-slate-100">
+          <SettingsRow
+            icon={<LogOut className="w-4 h-4" />}
+            danger
+            title="Sign Out"
+            subtitle="You will need to sign in again"
+            onClick={onLogout}
+          />
+          <SettingsRow
+            icon={<Trash2 className="w-4 h-4" />}
+            danger
+            title="Delete Account"
+            subtitle="Permanently delete your account and data"
+            onClick={() => {
+              if (window.confirm('Are you sure you want to delete your account? This action cannot be undone.')) {
+                // Account deletion logic placeholder
+              }
+            }}
+          />
+        </div>
+
+        {/* About Section */}
+        <SectionLabel>About</SectionLabel>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm px-4 pb-2 divide-y divide-slate-100">
+          <SettingsRow
+            icon={<Shield className="w-4 h-4" />}
+            iconColor="bg-gradient-to-tr from-pink-50 to-blue-50 text-pink-500 border border-pink-100"
+            title="SecureChat Pro"
+            subtitle="Version 1.0.0 · E2E Encrypted"
+          />
+          <div className="py-4 text-center">
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Built with RSA-2048 & AES-GCM encryption.<br />
+              Your messages are encrypted end-to-end.<br />
+              No one, not even us, can read them.
+            </p>
+            <div className="flex items-center justify-center gap-1.5 mt-3">
+              <Lock className="w-3 h-3 text-emerald-500" />
+              <span className="text-[10px] font-bold text-emerald-600">Zero-Knowledge Architecture</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Spacing */}
+        <div className="h-8" />
       </div>
     </div>
   );
