@@ -471,21 +471,21 @@ function App() {
       )}
 
       {/* Left Sidebar */}
-      <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-slate-200 transform transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} flex flex-col`}>
-        <div className="p-4 flex items-center justify-between border-b border-slate-100">
+      <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transform transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} flex flex-col`}>
+        <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <div className="p-2 rounded-xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white shadow-md shadow-blue-500/20">
               <Shield className="w-5 h-5" />
             </div>
             <div>
               <span className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-500 to-blue-500">SecureChat</span>
-              <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 font-bold">
+              <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                 Encrypted & Active
               </div>
             </div>
           </div>
-          <button className="lg:hidden p-1 text-slate-400 hover:text-slate-600" onClick={() => setIsMobileMenuOpen(false)}>
+          <button className="lg:hidden p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white" onClick={() => setIsMobileMenuOpen(false)}>
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -498,15 +498,15 @@ function App() {
               placeholder="Search user by @username..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-100/80 rounded-xl py-2 pl-9 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all" 
+              className="w-full bg-slate-100/80 dark:bg-slate-800 border border-transparent dark:border-slate-700 rounded-xl py-2 pl-9 pr-4 text-xs text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all" 
             />
             {isSearching && <RefreshCw className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 animate-spin" />}
           </div>
 
           {/* Live Search Results Popup */}
           {searchQuery.trim().length > 0 && (
-            <div className="absolute left-4 right-4 top-full mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto p-2">
-              <div className="text-[10px] font-bold text-slate-400 px-2 py-1 tracking-wider">USERS FOUND</div>
+            <div className="absolute left-4 right-4 top-full mt-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto p-2">
+              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 py-1 tracking-wider">USERS FOUND</div>
               {searchResults.length === 0 && !isSearching && (
                 <div className="p-3 text-center text-xs text-slate-400">No user found matching "@{searchQuery}"</div>
               )}
@@ -516,20 +516,20 @@ function App() {
                   <div 
                     key={u.id}
                     onClick={() => handleSelectUserToChat(u)}
-                    className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-100 cursor-pointer transition-colors"
+                    className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer transition-colors"
                   >
                     <div className="flex items-center gap-2.5">
                       <div className="relative">
                         <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 text-white font-bold text-xs flex items-center justify-center">
                           {u.username?.substring(0, 2).toUpperCase() || 'U'}
                         </div>
-                        <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${isOnline ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                        <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-900 ${isOnline ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'}`} />
                       </div>
                       <div>
-                        <div className="text-xs font-bold text-slate-800">@{u.username}</div>
+                        <div className="text-xs font-bold text-slate-800 dark:text-white">@{u.username}</div>
                       </div>
                     </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isOnline ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-100 text-slate-400'}`}>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isOnline ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
                       {isOnline ? 'Online' : 'Offline'}
                     </span>
                   </div>
@@ -542,9 +542,9 @@ function App() {
         <div className="flex-1 overflow-y-auto mt-1 px-3 space-y-4">
           {/* Chat Rooms */}
           <div>
-            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 px-2 mb-2 tracking-wider">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 mb-2 tracking-wider">
               <span>CHAT ROOMS ({Object.values(chats).filter(c => c.type === 'room').length})</span>
-              <button onClick={() => setIsNewRoomModalOpen(true)} className="p-1 hover:bg-slate-100 rounded border border-slate-200 text-slate-500 hover:text-slate-700 transition-colors" title="Create Room">
+              <button onClick={() => setIsNewRoomModalOpen(true)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors" title="Create Room">
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -567,7 +567,7 @@ function App() {
 
           {/* Direct Messages */}
           <div>
-            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 px-2 mb-2 tracking-wider">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 mb-2 tracking-wider">
               <span>DIRECT MESSAGES ({Object.values(chats).filter(c => c.type === 'direct').length})</span>
             </div>
             <div className="space-y-1">
@@ -594,24 +594,24 @@ function App() {
         </div>
 
         {/* User Footer */}
-        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between">
+        <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between">
            <div className="flex items-center gap-2.5 overflow-hidden">
               <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 text-white flex items-center justify-center font-bold text-xs flex-shrink-0 shadow-sm">
                 {userProfile?.username?.substring(0, 2).toUpperCase() || 'US'}
               </div>
               <div className="truncate">
-                <div className="text-xs font-bold text-slate-800 truncate">{userProfile?.username}</div>
-                <div className="text-[10px] text-slate-400 truncate">{userProfile?.email}</div>
+                <div className="text-xs font-bold text-slate-800 dark:text-white truncate">{userProfile?.username}</div>
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 truncate">{userProfile?.email}</div>
               </div>
            </div>
-           <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-colors" title="Sign Out">
+           <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors" title="Sign Out">
               <LogOut className="w-4 h-4" />
            </button>
         </div>
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col bg-white border-r border-slate-200 relative overflow-hidden pb-16 lg:pb-0">
+      <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 relative overflow-hidden pb-16 lg:pb-0">
         {/* Always-visible Mobile Header */}
         <div className="lg:hidden h-14 bg-slate-900 border-b border-slate-800 text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
           <button 
@@ -632,25 +632,25 @@ function App() {
         {activeChat ? (
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Top Bar */}
-            <div className="h-16 border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 bg-white/80 backdrop-blur-md z-10">
+            <div className="h-16 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 sticky top-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md z-10">
               <div className="flex items-center gap-3">
-                 <button className="hidden lg:hidden text-slate-600" onClick={() => setIsMobileMenuOpen(true)}>
+                 <button className="hidden lg:hidden text-slate-600 dark:text-slate-300" onClick={() => setIsMobileMenuOpen(true)}>
                     <Menu className="w-6 h-6" />
                  </button>
                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-sm ${activeChat.iconBg || 'bg-slate-100'}`}>
                     <Lock className="w-5 h-5 text-white" />
                  </div>
                  <div>
-                   <h2 className="font-bold text-slate-800 leading-tight text-sm md:text-base">{activeChat.name}</h2>
-                   <div className="flex items-center gap-2 text-xs text-slate-500">
-                     <span className="flex items-center gap-1 text-emerald-600 font-medium text-[11px]">
+                   <h2 className="font-bold text-slate-800 dark:text-white leading-tight text-sm md:text-base">{activeChat.name}</h2>
+                   <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                     <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium text-[11px]">
                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> RSA-2048 E2E Active
                      </span>
                    </div>
                  </div>
               </div>
               <div className="flex items-center gap-2 md:gap-3">
-                 <button onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${activeTab === 'raw' ? 'bg-pink-50 text-pink-600 border-pink-200 shadow-2xs' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                 <button onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${activeTab === 'raw' ? 'bg-pink-50 dark:bg-pink-950/40 text-pink-600 dark:text-pink-400 border-pink-200 dark:border-pink-900/50 shadow-2xs' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'}`}>
                    <Lock className="w-3.5 h-3.5" />
                    {activeTab === 'raw' ? 'Raw Cipher' : 'Decoded'}
                  </button>
@@ -658,20 +658,20 @@ function App() {
             </div>
 
             {/* Messages Container */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col space-y-4 bg-slate-50/50 dark:bg-slate-950">
                <div className="flex justify-center">
-                 <span className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 px-3 py-1 rounded-full shadow-2xs font-medium">
+                 <span className="text-[11px] text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-1 rounded-full shadow-2xs font-medium">
                    RSA-2048 & AES-GCM Encrypted
                  </span>
                </div>
 
                {(!activeChat.messages || activeChat.messages.length === 0) && (
-                  <div className="text-center text-slate-400 text-sm py-16 flex flex-col items-center">
-                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3 text-slate-400">
+                  <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-16 flex flex-col items-center">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center mb-3 text-slate-400">
                       <Shield className="w-6 h-6" />
                     </div>
-                    <p className="font-bold text-slate-700">No messages in channel</p>
-                    <p className="text-xs text-slate-400 mt-1 max-w-sm">Messages sent here are encrypted with RSA-OAEP before saving to the database.</p>
+                    <p className="font-bold text-slate-700 dark:text-slate-300">No messages in channel</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 max-w-sm">Messages sent here are encrypted with RSA-OAEP before saving to the database.</p>
                   </div>
                )}
 
@@ -688,16 +688,16 @@ function App() {
                      )}
                      <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[85%] md:max-w-lg`}>
                        {!isSent && (
-                          <span className="text-[10px] text-slate-400 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
                        )}
                        <div className={`px-4 py-3 rounded-2xl text-xs md:text-sm leading-relaxed shadow-2xs ${
                          isSent 
                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-tr-none' 
-                           : 'bg-slate-100 text-slate-800 border border-slate-200/60 rounded-tl-none'
-                       } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-xs break-all bg-slate-900 text-emerald-400 border-none' : ''}`}>
+                           : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800 rounded-tl-none'
+                       } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-xs break-all bg-slate-900 dark:bg-slate-950 text-emerald-400 border-none' : ''}`}>
                          {displayText}
                        </div>
-                       <span className={`text-[10px] text-slate-400 mt-1 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
+                       <span className={`text-[10px] text-slate-400 dark:text-slate-500 mt-1 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
                          {msg.time} {isSent && <Check className="w-3 h-3 text-blue-500" />}
                        </span>
                      </div>
@@ -729,20 +729,20 @@ function App() {
             </div>
 
             {/* Message Input */}
-            <form onSubmit={handleSend} className="p-3 md:p-4 bg-white border-t border-slate-200">
+            <form onSubmit={handleSend} className="p-3 md:p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
                <div className="flex items-center gap-2 md:gap-3 max-w-4xl mx-auto">
-                 <button type="button" className="w-9 h-9 md:w-10 md:h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors flex-shrink-0">
+                 <button type="button" className="w-9 h-9 md:w-10 md:h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors flex-shrink-0">
                    <Paperclip className="w-4 h-4 md:w-5 md:h-5" />
                  </button>
-                 <div className="flex-1 border border-slate-200 rounded-full px-3.5 py-2 md:py-2.5 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400 transition-all bg-slate-50 flex items-center">
+                 <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded-full px-3.5 py-2 md:py-2.5 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400 transition-all bg-slate-50 dark:bg-slate-950 flex items-center">
                     <input 
                       type="text" 
                       placeholder="Type encrypted message..." 
-                      className="flex-1 bg-transparent border-none focus:outline-none text-xs md:text-sm py-0.5 min-w-0" 
+                      className="flex-1 bg-transparent border-none focus:outline-none text-xs md:text-sm text-slate-800 dark:text-white placeholder-slate-400 py-0.5 min-w-0" 
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                     />
-                    <Smile className="w-4 h-4 md:w-5 md:h-5 text-slate-400 cursor-pointer hover:text-slate-600 ml-1.5 flex-shrink-0" />
+                    <Smile className="w-4 h-4 md:w-5 md:h-5 text-slate-400 cursor-pointer hover:text-slate-600 dark:hover:text-slate-200 ml-1.5 flex-shrink-0" />
                  </div>
                  <button type="submit" disabled={!input.trim()} className="w-10 h-10 md:w-11 md:h-11 rounded-full bg-gradient-to-r from-pink-500 to-blue-500 flex items-center justify-center text-white flex-shrink-0 shadow-md hover:shadow-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:grayscale active:scale-95">
                    <Send className="w-4 h-4 md:w-5 md:h-5 ml-0.5" />
@@ -751,12 +751,12 @@ function App() {
             </form>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50">
-            <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-blue-500 shadow-md mb-4">
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-slate-950">
+            <div className="w-16 h-16 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-blue-500 shadow-md mb-4">
               <Lock className="w-8 h-8" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800">No Active Channel</h3>
-            <p className="text-xs text-slate-500 mt-1 max-w-sm mb-4">
+            <h3 className="text-lg font-bold text-slate-800 dark:text-white">No Active Channel</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mb-4">
               Create or select a room from the menu to start exchanging encrypted messages.
             </p>
             <button onClick={() => setIsNewRoomModalOpen(true)} className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-md hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5">
@@ -817,28 +817,28 @@ function App() {
 
       {/* New Room Modal */}
       {isNewRoomModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100">
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 dark:border-slate-800">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-slate-800">Create Encrypted Room</h3>
-              <button onClick={() => setIsNewRoomModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <h3 className="text-lg font-bold text-slate-800 dark:text-white">Create Encrypted Room</h3>
+              <button onClick={() => setIsNewRoomModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <form onSubmit={handleCreateRoom} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Room Name</label>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Room Name</label>
                 <input 
                   type="text" 
                   placeholder="e.g. security-team" 
                   value={newRoomName}
                   onChange={e => setNewRoomName(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-800 dark:text-white rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
                   required
                 />
               </div>
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setIsNewRoomModalOpen(false)} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">
+                <button type="button" onClick={() => setIsNewRoomModalOpen(false)} className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
                   Cancel
                 </button>
                 <button type="submit" className="px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-pink-500 to-blue-500 rounded-xl shadow-md hover:opacity-90 transition-opacity">
