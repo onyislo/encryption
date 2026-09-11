@@ -268,10 +268,18 @@ export async function startDirectMessage(targetUserId, targetUsername) {
   if (!user) throw new Error('Not authenticated');
 
   const existingRooms = await fetchUserRooms();
-  const existingDirect = existingRooms?.find(r => 
-    r.type === 'direct' && 
-    r.participants?.some(p => p.user?.id === targetUserId)
-  );
+  
+  // Better duplicate check - check if a direct room exists with ONLY these 2 users
+  const existingDirect = existingRooms?.find(r => {
+    if (r.type !== 'direct') return false;
+    
+    const participantIds = r.participants?.map(p => p.user?.id || p.id).filter(Boolean) || [];
+    const hasTarget = participantIds.includes(targetUserId);
+    const hasCurrentUser = participantIds.includes(user.id);
+    const onlyTwoUsers = participantIds.length === 2;
+    
+    return hasTarget && hasCurrentUser && onlyTwoUsers;
+  });
 
   if (existingDirect) {
     return existingDirect;

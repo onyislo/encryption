@@ -1315,7 +1315,7 @@ function App() {
                        {!isSent && (
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
                        )}
-                       <div className={`px-3 lg:px-4 py-2 lg:py-3 rounded-2xl text-xs lg:text-sm leading-relaxed shadow-sm ${
+                       <div className={`px-3 lg:px-4 py-2 lg:py-3 rounded-2xl text-xs lg:text-sm leading-relaxed shadow-sm break-words ${
                          isSent 
                            ? 'bg-gradient-to-r from-pink-500 to-blue-600 text-white rounded-tr-sm' 
                            : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800 rounded-tl-sm'
