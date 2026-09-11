@@ -293,15 +293,15 @@ export function subscribeToPresence(userId, username, onPresenceChange) {
     .on('presence', { event: 'sync' }, () => {
       const state = channel.presenceState();
       const onlineUserIds = Object.keys(state);
-      onPresenceChange(onlineUserIds);
+      onPresenceChange(onlineUserIds, state);
     })
     .on('presence', { event: 'join' }, () => {
       const state = channel.presenceState();
-      onPresenceChange(Object.keys(state));
+      onPresenceChange(Object.keys(state), state);
     })
     .on('presence', { event: 'leave' }, () => {
       const state = channel.presenceState();
-      onPresenceChange(Object.keys(state));
+      onPresenceChange(Object.keys(state), state);
     })
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {

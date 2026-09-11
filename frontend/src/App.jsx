@@ -56,6 +56,17 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isChatRoomActive, setIsChatRoomActive] = useState(false);
+  
+  // Call system state
+  const [isInCall, setIsInCall] = useState(false);
+  const [callType, setCallType] = useState(null); // 'voice' or 'video'
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
 
   const getChatDisplayName = (chat) => {
     if (!chat) return '';
@@ -76,11 +87,210 @@ function App() {
     return chat.name || 'Encrypted Channel';
   };
 
+  // Call system functions
+  const createPeerConnection = () => {
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+    
+    const pc = new RTCPeerConnection(configuration);
+    
+    // Add local stream to peer connection
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        pc.addTrack(track, localStreamRef.current);
+      });
+    }
+    
+    // Handle incoming remote stream
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current && event.streams[0]) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+    
+    // Handle ICE candidates
+    pc.onicecandidate = async (event) => {
+      if (event.candidate && activeChatId) {
+        const candidateSignal = JSON.stringify({
+          type: 'ice-candidate',
+          candidate: event.candidate,
+          from: userProfile?.username
+        });
+        await sendEncryptedMessage(activeChatId, candidateSignal);
+      }
+    };
+    
+    return pc;
+  };
+
+  const startCall = async (type) => {
+    try {
+      setCallType(type);
+      const constraints = {
+        audio: true,
+        video: type === 'video'
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
+      
+      if (localVideoRef.current && type === 'video') {
+        localVideoRef.current.srcObject = stream;
+      }
+      
+      setIsInCall(true);
+      
+      // Create peer connection and offer
+      const pc = createPeerConnection();
+      peerConnectionRef.current = pc;
+      
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      // Send call signal with SDP offer
+      const callSignal = JSON.stringify({
+        type: 'call-start',
+        callType: type,
+        offer: offer,
+        from: userProfile?.username
+      });
+      
+      if (activeChatId) {
+        await sendEncryptedMessage(activeChatId, callSignal);
+      }
+      
+    } catch (err) {
+      console.error('Error starting call:', err);
+      alert('Could not access camera/microphone. Please check permissions.');
+    }
+  };
+
+  const endCall = async () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+    }
+    
+    // Notify other person
+    if (activeChatId) {
+      const endSignal = JSON.stringify({
+        type: 'call-end',
+        from: userProfile?.username
+      });
+      await sendEncryptedMessage(activeChatId, endSignal).catch(() => {});
+    }
+    
+    setIsInCall(false);
+    setCallType(null);
+    setIncomingCall(null);
+    setIsMuted(false);
+    setIsVideoOff(false);
+    localStreamRef.current = null;
+    peerConnectionRef.current = null;
+  };
+
+  const answerCall = async () => {
+    if (!incomingCall) return;
+    
+    try {
+      const constraints = {
+        audio: true,
+        video: incomingCall.callType === 'video'
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
+      
+      if (localVideoRef.current && incomingCall.callType === 'video') {
+        localVideoRef.current.srcObject = stream;
+      }
+      
+      setIsInCall(true);
+      setCallType(incomingCall.callType);
+      
+      // Create peer connection and answer
+      const pc = createPeerConnection();
+      peerConnectionRef.current = pc;
+      
+      if (incomingCall.offer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        
+        // Send answer signal
+        const answerSignal = JSON.stringify({
+          type: 'call-answer',
+          answer: answer,
+          from: userProfile?.username
+        });
+        
+        if (activeChatId) {
+          await sendEncryptedMessage(activeChatId, answerSignal);
+        }
+      }
+      
+      setIncomingCall(null);
+      
+    } catch (err) {
+      console.error('Error answering call:', err);
+      alert('Could not access camera/microphone.');
+    }
+  };
+
+  const declineCall = async () => {
+    if (activeChatId) {
+      const declineSignal = JSON.stringify({
+        type: 'call-decline',
+        from: userProfile?.username
+      });
+      await sendEncryptedMessage(activeChatId, declineSignal).catch(() => {});
+    }
+    setIncomingCall(null);
+  };
+
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return localStorage.getItem('theme') === 'dark';
   });
   const [isAppLocked, setIsAppLocked] = useState(false);
   const [autoLockEnabled, setAutoLockEnabled] = useState(true);
+  
+  // Last seen tracking
+  const [userLastSeen, setUserLastSeen] = useState({});
+
+  // Format last seen time
+  const formatLastSeen = (timestamp) => {
+    if (!timestamp) return 'Offline';
+    
+    const now = new Date();
+    const lastSeen = new Date(timestamp);
+    const diffMs = now - lastSeen;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return 'Online';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 2) return `${diffHours}h ago`;
+    if (diffHours < 24) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    
+    // Show date if more than 1 day
+    const day = lastSeen.getDate();
+    const month = lastSeen.toLocaleString('default', { month: 'short' });
+    const year = lastSeen.getFullYear();
+    const currentYear = now.getFullYear();
+    
+    if (year === currentYear) {
+      return `${day} ${month}`;
+    }
+    return `${day} ${month} ${year}`;
+  };
 
   // Apply dark mode theme class to <html> root element
   useEffect(() => {
@@ -212,8 +422,19 @@ function App() {
   useEffect(() => {
     if (!isLoggedIn || !userProfile?.id) return;
 
-    const channel = subscribeToPresence(userProfile.id, userProfile.username, (onlineIds) => {
+    const channel = subscribeToPresence(userProfile.id, userProfile.username, (onlineIds, presenceState) => {
       setOnlineUserIds(onlineIds);
+      
+      // Update last seen for all users
+      const lastSeenData = {};
+      Object.values(presenceState).forEach(presences => {
+        presences.forEach(presence => {
+          if (presence.user_id && presence.online_at) {
+            lastSeenData[presence.user_id] = presence.online_at;
+          }
+        });
+      });
+      setUserLastSeen(lastSeenData);
     });
 
     return () => {
@@ -293,6 +514,58 @@ function App() {
               plaintext = newMsg.encrypted_content;
             }
           }
+          
+          // Check if it's a call signal
+          try {
+            const parsed = JSON.parse(plaintext);
+            
+            // Handle different call signals
+            if (parsed.type === 'call-start' && newMsg.sender_id !== userProfile?.id) {
+              // Incoming call
+              setIncomingCall({
+                from: parsed.from,
+                callType: parsed.callType,
+                offer: parsed.offer
+              });
+              return;
+            } 
+            
+            if (parsed.type === 'call-answer' && newMsg.sender_id !== userProfile?.id) {
+              // Call answered - set remote description
+              if (peerConnectionRef.current && parsed.answer) {
+                await peerConnectionRef.current.setRemoteDescription(
+                  new RTCSessionDescription(parsed.answer)
+                );
+              }
+              return;
+            } 
+            
+            if (parsed.type === 'call-decline' && newMsg.sender_id !== userProfile?.id) {
+              // Call declined
+              alert(`${parsed.from} declined the call`);
+              endCall();
+              return;
+            }
+            
+            if (parsed.type === 'call-end') {
+              // Call ended by other person
+              endCall();
+              return;
+            }
+            
+            if (parsed.type === 'ice-candidate' && newMsg.sender_id !== userProfile?.id) {
+              // Handle ICE candidate
+              if (peerConnectionRef.current && parsed.candidate) {
+                await peerConnectionRef.current.addIceCandidate(
+                  new RTCIceCandidate(parsed.candidate)
+                );
+              }
+              return;
+            }
+          } catch (e) {
+            // Not a call signal, process as normal message
+          }
+          
           const formattedMsg = {
             id: newMsg.id,
             sender: 'Member',
@@ -654,13 +927,16 @@ function App() {
                   const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
                   const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
                   const displayName = getChatDisplayName(chat);
+                  const lastSeenTime = otherParticipant ? userLastSeen[otherParticipant.id] : null;
+                  const statusText = isUserOnline ? '🟢 Online' : formatLastSeen(lastSeenTime);
+                  
                   return (
                     <SidebarItem 
                       key={chat.id}
                       icon={<User className="w-4 h-4 text-white" />} 
                       iconBg={chat.iconBg || "bg-pink-600"} 
                       title={displayName} 
-                      subtitle={isUserOnline ? '🟢 Online' : '⚪ Offline'}
+                      subtitle={statusText}
                       active={activeChatId === chat.id} 
                       isOnline={isUserOnline}
                       onClick={() => {
@@ -827,6 +1103,8 @@ function App() {
                         const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
                         const displayName = getChatDisplayName(chat);
                         const lastMsg = chat.messages?.[chat.messages.length - 1];
+                        const lastSeenTime = otherParticipant ? userLastSeen[otherParticipant.id] : null;
+                        const statusText = isUserOnline ? '🟢 Online now' : formatLastSeen(lastSeenTime);
 
                         return (
                           <div
@@ -851,7 +1129,7 @@ function App() {
                               <div className="overflow-hidden">
                                 <div className="text-sm font-bold text-white truncate">{displayName}</div>
                                 <div className="text-xs text-slate-400 truncate mt-0.5">
-                                  {lastMsg ? lastMsg.text : (isUserOnline ? '🟢 Online now' : '⚪ Offline')}
+                                  {lastMsg ? lastMsg.text : statusText}
                                 </div>
                               </div>
                             </div>
@@ -933,15 +1211,63 @@ function App() {
                      {getChatDisplayName(activeChat)}
                    </h2>
                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                     <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px] lg:text-[11px] truncate">
-                       <span className="w-1.5 h-1.5 lg:w-2 lg:h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0"></span>
-                       <span className="hidden sm:inline">{activeChat.type === 'direct' ? 'Direct Message · E2E Active' : 'RSA-2048 E2E Active'}</span>
-                       <span className="sm:hidden">Online</span>
-                     </span>
+                     {activeChat.type === 'direct' ? (
+                       <span className="flex items-center gap-1 font-semibold text-[10px] lg:text-[11px] truncate">
+                         {(() => {
+                           const otherParticipant = activeChat.participants?.find(p => p.id !== userProfile?.id);
+                           const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
+                           const lastSeenTime = otherParticipant ? userLastSeen[otherParticipant.id] : null;
+                           
+                           if (isUserOnline) {
+                             return (
+                               <>
+                                 <span className="w-1.5 h-1.5 lg:w-2 lg:h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0"></span>
+                                 <span className="text-emerald-600 dark:text-emerald-400">Online</span>
+                               </>
+                             );
+                           } else {
+                             return (
+                               <>
+                                 <span className="w-1.5 h-1.5 lg:w-2 lg:h-2 rounded-full bg-slate-400 flex-shrink-0"></span>
+                                 <span className="text-slate-500 dark:text-slate-400">
+                                   {formatLastSeen(lastSeenTime)}
+                                 </span>
+                               </>
+                             );
+                           }
+                         })()}
+                       </span>
+                     ) : (
+                       <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px] lg:text-[11px] truncate">
+                         <span className="w-1.5 h-1.5 lg:w-2 lg:h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0"></span>
+                         <span className="hidden sm:inline">RSA-2048 E2E Active</span>
+                         <span className="sm:hidden">Encrypted</span>
+                       </span>
+                     )}
                    </div>
                  </div>
               </div>
               <div className="flex items-center gap-1.5 lg:gap-2 flex-shrink-0 ml-2">
+                 {/* Call Buttons - Only show for direct messages */}
+                 {activeChat.type === 'direct' && !isInCall && (
+                   <>
+                     <button 
+                       onClick={() => startCall('voice')}
+                       className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors active:scale-95"
+                       title="Voice Call"
+                     >
+                       <Phone className="w-4 h-4" />
+                     </button>
+                     <button 
+                       onClick={() => startCall('video')}
+                       className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-blue-100 dark:hover:bg-blue-900/30 hover:text-blue-600 dark:hover:text-blue-400 transition-colors active:scale-95"
+                       title="Video Call"
+                     >
+                       <Video className="w-4 h-4" />
+                     </button>
+                   </>
+                 )}
+                 
                  <button 
                    onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} 
                    className={`px-2 lg:px-3 py-1 lg:py-1.5 rounded-lg lg:rounded-xl text-[10px] lg:text-xs font-bold flex items-center gap-1 lg:gap-1.5 transition-all border ${
@@ -1180,6 +1506,141 @@ function App() {
         keys={keys} 
         publicKeyPem={publicKeyPem} 
       />
+
+      {/* Active Call Overlay */}
+      {isInCall && (
+        <div className="fixed inset-0 bg-slate-950 z-[200] flex flex-col">
+          {/* Call Header */}
+          <div className="p-4 flex items-center justify-between border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-bold">
+                {getChatDisplayName(activeChat).substring(0, 2).toUpperCase()}
+              </div>
+              <div>
+                <h3 className="text-white font-bold">{getChatDisplayName(activeChat)}</h3>
+                <p className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  {callType === 'video' ? 'Video Call' : 'Voice Call'} · Connected
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={endCall}
+              className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold text-sm transition-colors"
+            >
+              End Call
+            </button>
+          </div>
+
+          {/* Video Container */}
+          {callType === 'video' && (
+            <div className="flex-1 relative bg-slate-900">
+              {/* Remote Video (Main) */}
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover"
+              />
+              
+              {/* Local Video (Picture-in-Picture) */}
+              <div className="absolute bottom-4 right-4 w-32 h-48 lg:w-48 lg:h-64 rounded-2xl overflow-hidden border-2 border-slate-700 shadow-xl">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover mirror"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Voice Call UI */}
+          {callType === 'voice' && (
+            <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+              <div className="w-32 h-32 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-black text-4xl mb-6 shadow-2xl animate-pulse">
+                {getChatDisplayName(activeChat).substring(0, 2).toUpperCase()}
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-2">{getChatDisplayName(activeChat)}</h2>
+              <p className="text-emerald-400 text-sm font-semibold">Voice call in progress...</p>
+            </div>
+          )}
+
+          {/* Call Controls */}
+          <div className="p-6 flex items-center justify-center gap-4 bg-slate-900/80 backdrop-blur-md border-t border-slate-800">
+            <button
+              onClick={() => {
+                const audioTrack = localStreamRef.current?.getAudioTracks()[0];
+                if (audioTrack) {
+                  audioTrack.enabled = !audioTrack.enabled;
+                  setIsMuted(!audioTrack.enabled);
+                }
+              }}
+              className={`w-14 h-14 rounded-full ${isMuted ? 'bg-rose-500' : 'bg-slate-800'} hover:bg-slate-700 text-white flex items-center justify-center transition-colors`}
+              title={isMuted ? 'Unmute' : 'Mute'}
+            >
+              {isMuted ? <X className="w-6 h-6" /> : <Phone className="w-6 h-6" />}
+            </button>
+            
+            {callType === 'video' && (
+              <button
+                onClick={() => {
+                  const videoTrack = localStreamRef.current?.getVideoTracks()[0];
+                  if (videoTrack) {
+                    videoTrack.enabled = !videoTrack.enabled;
+                    setIsVideoOff(!videoTrack.enabled);
+                  }
+                }}
+                className={`w-14 h-14 rounded-full ${isVideoOff ? 'bg-rose-500' : 'bg-slate-800'} hover:bg-slate-700 text-white flex items-center justify-center transition-colors`}
+                title={isVideoOff ? 'Turn Video On' : 'Turn Video Off'}
+              >
+                <Video className="w-6 h-6" />
+              </button>
+            )}
+            
+            <button
+              onClick={endCall}
+              className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center transition-colors shadow-lg"
+              title="End Call"
+            >
+              <Phone className="w-7 h-7 rotate-[135deg]" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Incoming Call Notification */}
+      {incomingCall && !isInCall && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
+          <div className="bg-slate-900 rounded-3xl p-8 max-w-sm w-full border border-slate-800 shadow-2xl">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-black text-3xl mb-4 animate-pulse">
+                {incomingCall.from?.substring(0, 2).toUpperCase() || 'CA'}
+              </div>
+              <h3 className="text-xl font-bold text-white mb-1">{incomingCall.from || 'Unknown'}</h3>
+              <p className="text-sm text-slate-400 mb-6">
+                Incoming {incomingCall.callType === 'video' ? 'video' : 'voice'} call...
+              </p>
+              
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={declineCall}
+                  className="flex-1 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-2xl font-bold transition-colors"
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={answerCall}
+                  className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-bold transition-colors"
+                >
+                  Answer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
