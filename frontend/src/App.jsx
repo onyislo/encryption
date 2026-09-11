@@ -512,7 +512,7 @@ function App() {
   const activeChat = chats[activeChatId];
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors">
+    <div className="flex h-screen max-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors fixed inset-0 w-full">
       {/* Settings Page Overlay */}
       {isSettingsOpen && (
         <SettingsPage
@@ -693,7 +693,7 @@ function App() {
       </div>
 
       {/* Main Area */}
-      <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 relative overflow-hidden pb-16 lg:pb-0">
+      <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 relative overflow-hidden">
         {/* Mobile Header */}
         <div className="lg:hidden h-14 bg-slate-900 border-b border-slate-800 text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
           <div className="flex items-center gap-2.5">
@@ -728,7 +728,7 @@ function App() {
 
         {/* Mobile Dedicated Chats Page (shown when user is on mobile & not inside an active chat conversation) */}
         {!isChatRoomActive && (
-          <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-20">
+          <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-16">
             {/* Header / Current User Bar */}
             <div className="p-4 border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
               <div className="flex items-center gap-3">
@@ -908,68 +908,69 @@ function App() {
 
         {/* Active Chat Conversation Area */}
         {activeChat ? (
-          <div className={`flex-1 flex flex-col overflow-hidden ${!isChatRoomActive ? 'hidden lg:flex' : 'flex'}`}>
+          <div className={`flex-1 flex flex-col overflow-hidden h-full ${!isChatRoomActive ? 'hidden lg:flex' : 'flex'}`}>
             {/* Header Top Bar */}
-            <div className="h-16 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md z-10 shadow-sm">
-              <div className="flex items-center gap-3 min-w-0">
+            <div className="h-14 lg:h-16 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-3 lg:px-4 sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-[100] shadow-sm shrink-0">
+              <div className="flex items-center gap-2 lg:gap-3 min-w-0 flex-1">
                  <button 
-                   className="lg:hidden p-2 -ml-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors flex-shrink-0"
+                   className="lg:hidden p-1.5 -ml-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors flex-shrink-0"
                    onClick={() => setIsChatRoomActive(false)}
                    title="Back to Conversations"
                  >
                     <ChevronLeft className="w-5 h-5" />
                  </button>
-                 <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-white shadow-md flex-shrink-0 ${activeChat.iconBg || 'bg-gradient-to-tr from-pink-500 to-indigo-600'}`}>
+                 <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-xl lg:rounded-2xl flex items-center justify-center font-black text-white shadow-md flex-shrink-0 ${activeChat.iconBg || 'bg-gradient-to-tr from-pink-500 to-indigo-600'}`}>
                     {activeChat.type === 'room' ? (
-                      <Lock className="w-5 h-5 text-white" />
+                      <Lock className="w-4 h-4 lg:w-5 lg:h-5 text-white" />
                     ) : (
-                      <span className="text-sm font-black">
+                      <span className="text-xs lg:text-sm font-black">
                         {getChatDisplayName(activeChat).replace('@', '').substring(0, 2).toUpperCase() || 'U'}
                       </span>
                     )}
                  </div>
-                 <div className="min-w-0">
-                   <h2 className="font-extrabold text-slate-900 dark:text-white leading-tight text-base md:text-lg truncate">
+                 <div className="min-w-0 flex-1">
+                   <h2 className="font-extrabold text-slate-900 dark:text-white leading-tight text-sm lg:text-base truncate">
                      {getChatDisplayName(activeChat)}
                    </h2>
                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                     <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px] truncate">
-                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0"></span>
-                       {activeChat.type === 'direct' ? 'Direct Message · E2E Active' : 'RSA-2048 E2E Active'}
+                     <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px] lg:text-[11px] truncate">
+                       <span className="w-1.5 h-1.5 lg:w-2 lg:h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0"></span>
+                       <span className="hidden sm:inline">{activeChat.type === 'direct' ? 'Direct Message · E2E Active' : 'RSA-2048 E2E Active'}</span>
+                       <span className="sm:hidden">Online</span>
                      </span>
                    </div>
                  </div>
               </div>
-              <div className="flex items-center gap-2 md:gap-3 flex-shrink-0 ml-2">
+              <div className="flex items-center gap-1.5 lg:gap-2 flex-shrink-0 ml-2">
                  <button 
                    onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} 
-                   className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${
+                   className={`px-2 lg:px-3 py-1 lg:py-1.5 rounded-lg lg:rounded-xl text-[10px] lg:text-xs font-bold flex items-center gap-1 lg:gap-1.5 transition-all border ${
                      activeTab === 'raw' 
                        ? 'bg-pink-50 dark:bg-pink-950/40 text-pink-600 dark:text-pink-400 border-pink-200 dark:border-pink-900/50 shadow-2xs' 
                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                    }`}
                  >
-                   <Lock className="w-3.5 h-3.5" />
-                   {activeTab === 'raw' ? 'Raw Cipher' : 'Decoded Text'}
+                   <Lock className="w-3 h-3 lg:w-3.5 lg:h-3.5" />
+                   <span className="hidden sm:inline">{activeTab === 'raw' ? 'Raw' : 'Text'}</span>
                  </button>
               </div>
             </div>
 
             {/* Messages Container */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col space-y-4 bg-slate-50/50 dark:bg-slate-950">
-               <div className="flex justify-center">
-                 <span className="text-[11px] text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-1 rounded-full shadow-2xs font-medium">
+            <div className="flex-1 overflow-y-auto p-3 lg:p-4 flex flex-col space-y-3 lg:space-y-4 bg-slate-50/50 dark:bg-slate-950 overscroll-contain">
+               <div className="flex justify-center pt-2">
+                 <span className="text-[10px] lg:text-[11px] text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-2.5 lg:px-3 py-1 rounded-full shadow-2xs font-medium">
                    RSA-2048 & AES-GCM Encrypted Tunnel
                  </span>
                </div>
 
                {(!activeChat.messages || activeChat.messages.length === 0) && (
-                  <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-16 flex flex-col items-center">
+                  <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8 lg:py-16 flex flex-col items-center">
                     <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center mb-3 text-slate-400">
                       <Shield className="w-6 h-6" />
                     </div>
-                    <p className="font-bold text-slate-700 dark:text-slate-300">No messages in conversation</p>
-                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 max-w-sm">Messages sent here are encrypted end-to-end with RSA-2048 before saving.</p>
+                    <p className="font-bold text-slate-700 dark:text-slate-300 text-sm">No messages in conversation</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 max-w-sm px-4">Messages sent here are encrypted end-to-end with RSA-2048 before saving.</p>
                   </div>
                )}
 
@@ -978,25 +979,25 @@ function App() {
                  const displayText = (activeTab === 'raw' && msg.encrypted) ? msg.encrypted : msg.text;
 
                  return (
-                   <div key={idx} className={`flex gap-2.5 ${isSent ? 'justify-end' : ''}`}>
+                   <div key={idx} className={`flex gap-2 ${isSent ? 'justify-end' : ''}`}>
                      {!isSent && (
-                       <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-pink-500 to-blue-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
+                       <div className="w-7 h-7 lg:w-8 lg:h-8 rounded-full bg-gradient-to-tr from-pink-500 to-blue-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
                           {msg.sender ? msg.sender.charAt(0).toUpperCase() : 'M'}
                        </div>
                      )}
-                     <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[85%] md:max-w-lg`}>
+                     <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[80%] lg:max-w-lg`}>
                        {!isSent && (
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
                        )}
-                       <div className={`px-4 py-3 rounded-2xl text-xs md:text-sm leading-relaxed shadow-2xs ${
+                       <div className={`px-3 lg:px-4 py-2 lg:py-3 rounded-2xl text-xs lg:text-sm leading-relaxed shadow-sm ${
                          isSent 
-                           ? 'bg-gradient-to-r from-pink-500 to-blue-600 text-white rounded-tr-none' 
-                           : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800 rounded-tl-none'
-                       } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-xs break-all bg-slate-900 dark:bg-slate-950 text-emerald-400 border-none' : ''}`}>
+                           ? 'bg-gradient-to-r from-pink-500 to-blue-600 text-white rounded-tr-sm' 
+                           : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800 rounded-tl-sm'
+                       } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-[10px] lg:text-xs break-all bg-slate-900 dark:bg-slate-950 text-emerald-400 border-none' : ''}`}>
                          {displayText}
                        </div>
-                       <span className={`text-[10px] text-slate-400 dark:text-slate-500 mt-1 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
-                         {msg.time} {isSent && <Check className="w-3 h-3 text-blue-500" />}
+                       <span className={`text-[9px] lg:text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
+                         {msg.time} {isSent && <Check className="w-3 h-3 text-blue-400" />}
                        </span>
                      </div>
                    </div>
@@ -1029,23 +1030,23 @@ function App() {
             </div>
 
             {/* Message Input Bar */}
-            <form onSubmit={handleSend} className="p-3 md:p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-               <div className="flex items-center gap-2 md:gap-3 max-w-4xl mx-auto">
-                 <button type="button" className="w-9 h-9 md:w-10 md:h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors flex-shrink-0">
-                   <Paperclip className="w-4 h-4 md:w-5 md:h-5" />
+            <form onSubmit={handleSend} className="p-2.5 lg:p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 pb-safe">
+               <div className="flex items-center gap-2 max-w-4xl mx-auto">
+                 <button type="button" className="hidden sm:flex w-9 h-9 lg:w-10 lg:h-10 items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors flex-shrink-0">
+                   <Paperclip className="w-4 h-4 lg:w-5 lg:h-5" />
                  </button>
-                 <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded-full px-3.5 py-2 md:py-2.5 focus-within:ring-2 focus-within:ring-pink-500/30 focus-within:border-pink-400 transition-all bg-slate-50 dark:bg-slate-950 flex items-center">
+                 <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded-full px-3 lg:px-3.5 py-2 focus-within:ring-2 focus-within:ring-pink-500/30 focus-within:border-pink-400 transition-all bg-slate-50 dark:bg-slate-950 flex items-center">
                     <input 
                       type="text" 
                       placeholder={`Message ${getChatDisplayName(activeChat)}...`}
-                      className="flex-1 bg-transparent border-none focus:outline-none text-xs md:text-sm text-slate-800 dark:text-white placeholder-slate-400 py-0.5 min-w-0" 
+                      className="flex-1 bg-transparent border-none focus:outline-none text-sm text-slate-800 dark:text-white placeholder-slate-400 py-0.5 min-w-0" 
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                     />
-                    <Smile className="w-4 h-4 md:w-5 md:h-5 text-slate-400 cursor-pointer hover:text-slate-600 dark:hover:text-slate-200 ml-1.5 flex-shrink-0" />
+                    <Smile className="w-4 h-4 lg:w-5 lg:h-5 text-slate-400 cursor-pointer hover:text-slate-600 dark:hover:text-slate-200 ml-1.5 flex-shrink-0" />
                  </div>
-                 <button type="submit" disabled={!input.trim()} className="w-10 h-10 md:w-11 md:h-11 rounded-full bg-gradient-to-r from-pink-500 to-blue-500 flex items-center justify-center text-white flex-shrink-0 shadow-md hover:shadow-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:grayscale active:scale-95">
-                   <Send className="w-4 h-4 md:w-5 md:h-5 ml-0.5" />
+                 <button type="submit" disabled={!input.trim()} className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-blue-500 flex items-center justify-center text-white flex-shrink-0 shadow-md hover:shadow-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:grayscale active:scale-95">
+                   <Send className="w-4 h-4 lg:w-5 lg:h-5 ml-0.5" />
                  </button>
                </div>
             </form>
@@ -1068,16 +1069,16 @@ function App() {
 
       {/* Floating Mobile Bottom Navigation Bar - Sleek & Imported Everywhere on Mobile */}
       {!isChatRoomActive && !isAppLocked && (
-        <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-2xl border border-slate-800/90 rounded-3xl shadow-2xl shadow-pink-500/10 z-[100] px-3 py-2 flex items-center justify-around text-slate-400 transition-all">
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-slate-900/98 backdrop-blur-2xl border-t border-slate-800/90 shadow-2xl shadow-pink-500/5 z-[100] px-3 py-2 flex items-center justify-around text-slate-400 transition-all safe-area-inset-bottom">
           <button 
             onClick={() => {
               setIsSearchOpen(false);
               setIsSettingsOpen(false);
               setIsChatRoomActive(false);
             }} 
-            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+            className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
               !isSearchOpen && !isSettingsOpen && !isChatRoomActive 
-                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10' 
                 : 'hover:text-white hover:bg-slate-800/50'
             }`}
           >
@@ -1090,9 +1091,9 @@ function App() {
               setIsSettingsOpen(false);
               setIsSearchOpen(true);
             }} 
-            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+            className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
               isSearchOpen 
-                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10' 
                 : 'hover:text-white hover:bg-slate-800/50'
             }`}
           >
@@ -1102,7 +1103,7 @@ function App() {
 
           <button 
             onClick={() => setIsNewRoomModalOpen(true)} 
-            className="w-11 h-11 -mt-6 bg-gradient-to-tr from-pink-500 via-purple-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-xl shadow-pink-500/30 hover:scale-105 active:scale-95 transition-transform border-2 border-slate-900"
+            className="w-12 h-12 -mt-7 bg-gradient-to-tr from-pink-500 via-purple-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-xl shadow-pink-500/30 hover:scale-105 active:scale-95 transition-transform border-4 border-slate-900"
             title="Create Room"
           >
             <Plus className="w-6 h-6" />
@@ -1110,9 +1111,9 @@ function App() {
 
           <button 
             onClick={() => setIsCryptoModalOpen(true)} 
-            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+            className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
               isCryptoModalOpen 
-                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10' 
                 : 'hover:text-white hover:bg-slate-800/50'
             }`}
           >
@@ -1125,9 +1126,9 @@ function App() {
               setIsSearchOpen(false);
               setIsSettingsOpen(true);
             }} 
-            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+            className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
               isSettingsOpen 
-                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10' 
                 : 'hover:text-white hover:bg-slate-800/50'
             }`}
             title="Settings"
