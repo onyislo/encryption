@@ -154,19 +154,15 @@ export async function createRoom(roomName, participantIds = []) {
   const newRoomId = crypto.randomUUID();
   const roomType = roomName ? 'room' : 'direct';
 
-  const { data: room, error: roomError } = await supabase
+  const { error: roomError } = await supabase
     .from('rooms')
     .insert({
       id: newRoomId,
       name: roomName,
       type: roomType,
-    })
-    .select()
-    .maybeSingle();
+    });
 
-  if (roomError) {
-    console.warn("Room insert note:", roomError.message);
-  }
+  if (roomError) throw roomError;
 
   const allParticipantIds = Array.from(new Set([user.id, ...participantIds]));
   const participantsInsert = allParticipantIds.map(uid => ({
@@ -180,7 +176,7 @@ export async function createRoom(roomName, participantIds = []) {
 
   if (joinError) throw joinError;
 
-  return room || { id: newRoomId, name: roomName, type: roomType };
+  return { id: newRoomId, name: roomName, type: roomType };
 }
 
 export async function addParticipant(roomId, targetUserId) {
@@ -277,30 +273,7 @@ export async function startDirectMessage(targetUserId, targetUsername) {
     return existingDirect;
   }
 
-  const { data: room, error: roomError } = await supabase
-    .from('rooms')
-    .insert({
-      name: targetUsername ? `@${targetUsername}` : 'Direct Message',
-      type: 'direct',
-    })
-    .select()
-    .single();
-
-  if (roomError) throw roomError;
-
-  const allParticipantIds = Array.from(new Set([user.id, targetUserId]));
-  const participantsInsert = allParticipantIds.map(uid => ({
-    room_id: room.id,
-    user_id: uid,
-  }));
-
-  const { error: joinError } = await supabase
-    .from('room_participants')
-    .insert(participantsInsert);
-
-  if (joinError) throw joinError;
-
-  return room;
+  return await createRoom(targetUsername ? `@${targetUsername}` : 'Direct Message', [targetUserId]);
 }
 
 export function subscribeToPresence(userId, username, onPresenceChange) {
