@@ -132,12 +132,7 @@ ON public.rooms FOR INSERT TO authenticated WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow select for room members" ON public.room_participants;
 CREATE POLICY "Allow select for room members" 
-ON public.room_participants FOR SELECT TO authenticated USING (
-    EXISTS (
-        SELECT 1 FROM public.room_participants AS rp
-        WHERE rp.room_id = room_id AND rp.user_id = auth.uid()
-    )
-);
+ON public.room_participants FOR SELECT TO authenticated USING (true);
 
 DROP POLICY IF EXISTS "Allow members creation" ON public.room_participants;
 CREATE POLICY "Allow members creation" 

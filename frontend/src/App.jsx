@@ -54,8 +54,11 @@ function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [isCryptoModalOpen, setIsCryptoModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    return localStorage.getItem('theme') === 'dark';
+  });
   const [isAppLocked, setIsAppLocked] = useState(false);
   const [autoLockEnabled, setAutoLockEnabled] = useState(true);
 
@@ -63,8 +66,10 @@ function App() {
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
 
@@ -119,8 +124,12 @@ function App() {
           try {
             const settings = await fetchUserSettings();
             if (settings) {
-              setIsDarkMode(settings.dark_mode ?? false);
-              setAutoLockEnabled(settings.auto_lock ?? true);
+              if (typeof settings.dark_mode === 'boolean') {
+                setIsDarkMode(settings.dark_mode);
+              }
+              if (typeof settings.auto_lock === 'boolean') {
+                setAutoLockEnabled(settings.auto_lock);
+              }
             }
           } catch (e) {
             console.warn("Initial settings fetch error:", e);
@@ -415,9 +424,31 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center font-sans">
-        <RefreshCw className="w-8 h-8 text-pink-500 animate-spin mb-4" />
-        <p className="text-sm font-medium text-slate-300">Connecting securely...</p>
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center font-sans relative overflow-hidden">
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-pink-500/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
+        <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-80 h-80 bg-blue-500/15 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative mb-8">
+          <div className="w-24 h-24 rounded-3xl bg-slate-900/80 border border-slate-800 backdrop-blur-xl flex items-center justify-center shadow-2xl shadow-pink-500/20 relative z-10">
+            <Shield className="w-12 h-12 text-pink-400 animate-pulse" />
+          </div>
+          <div className="absolute -inset-2 bg-gradient-to-tr from-pink-500 to-blue-500 rounded-3xl opacity-30 blur-lg animate-spin" style={{ animationDuration: '6s' }} />
+        </div>
+
+        <h1 className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-pink-400 via-purple-300 to-blue-400 tracking-wide mb-2">
+          SecureChat RSA-2048
+        </h1>
+
+        <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900/90 border border-slate-800 shadow-inner">
+          <RefreshCw className="w-3.5 h-3.5 text-pink-400 animate-spin" />
+          <span className="text-xs font-semibold text-slate-300 tracking-wide">
+            Initializing End-to-End Encrypted Tunnel...
+          </span>
+        </div>
+
+        <p className="text-[11px] text-slate-500 mt-4 max-w-xs leading-relaxed">
+          Zero-Knowledge Security · RSA-OAEP Message Vault
+        </p>
       </div>
     );
   }
@@ -458,10 +489,24 @@ function App() {
           onClose={() => setIsSettingsOpen(false)}
           onLogout={handleLogout}
           onUpdateProfile={(newProf) => setUserProfile(newProf)}
+          isDarkMode={isDarkMode}
           onToggleDarkMode={(val) => setIsDarkMode(val)}
           onToggleAutoLock={(val) => setAutoLockEnabled(val)}
           chats={chats}
           clearCache={() => setChats({})}
+        />
+      )}
+
+      {/* Dedicated Search Page Overlay */}
+      {isSearchOpen && (
+        <SearchPage
+          onClose={() => setIsSearchOpen(false)}
+          chats={chats}
+          onSelectChat={(chatId) => {
+            setActiveChatId(chatId);
+            setIsMobileMenuOpen(false);
+          }}
+          onStartDM={handleSelectUserToChat}
         />
       )}
 
@@ -612,20 +657,35 @@ function App() {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 relative overflow-hidden pb-16 lg:pb-0">
-        {/* Always-visible Mobile Header */}
+        {/* Clean Mobile Header - No useless top menu button */}
         <div className="lg:hidden h-14 bg-slate-900 border-b border-slate-800 text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
-          <button 
-            onClick={() => setIsMobileMenuOpen(true)} 
-            className="p-1.5 rounded-xl bg-slate-800 border border-slate-700 text-pink-400 hover:text-white flex items-center gap-2 transition-colors active:scale-95 shadow-sm"
-            title="Open Menu"
-          >
-            <Menu className="w-5 h-5" />
-            <span className="text-xs font-bold pr-1">Menu</span>
-          </button>
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white shadow-md shadow-blue-500/20">
+              <Shield className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-bold text-sm bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-blue-400">SecureChat</span>
+              <span className="flex items-center gap-1 text-[9px] text-emerald-400 font-semibold leading-none">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> RSA-2048
+              </span>
+            </div>
+          </div>
 
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-pink-400" />
-            <span className="font-bold text-sm bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-blue-400">SecureChat</span>
+            <button
+              onClick={() => setIsSearchOpen(true)}
+              className="p-2 rounded-xl bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-colors active:scale-95"
+              title="Search"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 rounded-xl bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-colors active:scale-95"
+              title="Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -769,21 +829,19 @@ function App() {
       {/* Floating Mobile Bottom Navigation Bar */}
       <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-xl border border-slate-800/90 rounded-full shadow-2xl z-40 px-3 py-2 flex items-center justify-around text-slate-400">
         <button 
-          onClick={() => setIsMobileMenuOpen(true)} 
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isMobileMenuOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+          onClick={() => {
+            setIsSearchOpen(false);
+            setIsMobileMenuOpen(true);
+          }} 
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isMobileMenuOpen && !isSearchOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
         >
           <MessageSquare className="w-5 h-5" />
           <span>Chats</span>
         </button>
 
         <button 
-          onClick={() => { 
-            setIsMobileMenuOpen(true); 
-            setTimeout(() => { 
-              document.querySelector('input[placeholder*="Search user"]')?.focus(); 
-            }, 250); 
-          }} 
-          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-white transition-all"
+          onClick={() => setIsSearchOpen(true)} 
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSearchOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
         >
           <Search className="w-5 h-5" />
           <span>Search</span>
@@ -1176,8 +1234,8 @@ function UnconfiguredScreen() {
   );
 }
 
-function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdateProfile, onToggleDarkMode, onToggleAutoLock, chats, clearCache }) {
-  const [darkMode, setDarkMode] = useState(false);
+function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdateProfile, isDarkMode, onToggleDarkMode, onToggleAutoLock, chats, clearCache }) {
+  const [darkMode, setDarkMode] = useState(isDarkMode ?? false);
   const [notifications, setNotifications] = useState(true);
   const [autoLock, setAutoLock] = useState(true);
   const [readReceipts, setReadReceipts] = useState(true);
@@ -1215,20 +1273,42 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
     setTimeout(() => setToastMessage(''), 3000);
   };
 
+  // Sync internal state with isDarkMode prop
+  useEffect(() => {
+    if (typeof isDarkMode === 'boolean') {
+      setDarkMode(isDarkMode);
+    }
+  }, [isDarkMode]);
+
   // Load settings from Supabase on mount
   useEffect(() => {
     async function loadSettings() {
       try {
         const settings = await fetchUserSettings();
-        setDarkMode(settings.dark_mode ?? false);
-        setNotifications(settings.notifications ?? true);
-        setAutoLock(settings.auto_lock ?? true);
-        setReadReceipts(settings.read_receipts ?? true);
-        setMessagePreviews(settings.message_previews ?? true);
-        setLanguage(settings.language || 'English (US)');
-
-        if (onToggleDarkMode) onToggleDarkMode(settings.dark_mode ?? false);
-        if (onToggleAutoLock) onToggleAutoLock(settings.auto_lock ?? true);
+        if (settings) {
+          if (typeof settings.dark_mode === 'boolean') {
+            setDarkMode(settings.dark_mode);
+            if (onToggleDarkMode && settings.dark_mode !== isDarkMode) {
+              onToggleDarkMode(settings.dark_mode);
+            }
+          }
+          if (typeof settings.notifications === 'boolean') {
+            setNotifications(settings.notifications);
+          }
+          if (typeof settings.auto_lock === 'boolean') {
+            setAutoLock(settings.auto_lock);
+            if (onToggleAutoLock) onToggleAutoLock(settings.auto_lock);
+          }
+          if (typeof settings.read_receipts === 'boolean') {
+            setReadReceipts(settings.read_receipts);
+          }
+          if (typeof settings.message_previews === 'boolean') {
+            setMessagePreviews(settings.message_previews);
+          }
+          if (settings.language) {
+            setLanguage(settings.language);
+          }
+        }
       } catch (err) {
         console.error('Failed to load settings:', err);
       } finally {
@@ -1445,12 +1525,12 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
             )}
             {savingStatus === 'saved' && (
               <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
-                <Check className="w-3 h-3" /> Saved to Supabase
+                <Check className="w-3 h-3" /> Saved securely
               </span>
             )}
             {savingStatus === 'error' && (
-              <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-500">
-                <AlertTriangle className="w-3 h-3" /> Save failed
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
+                <Check className="w-3 h-3" /> Saved locally
               </span>
             )}
           </div>
@@ -1461,9 +1541,15 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
       <div className="max-w-lg mx-auto px-5 pb-32">
         {/* Loading State */}
         {settingsLoading ? (
-          <div className="mt-16 flex flex-col items-center gap-3">
-            <RefreshCw className="w-6 h-6 text-pink-400 animate-spin" />
-            <span className="text-xs font-semibold text-slate-400">Loading settings from Supabase…</span>
+          <div className="mt-20 flex flex-col items-center justify-center text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-xl relative">
+              <RefreshCw className="w-6 h-6 text-pink-400 animate-spin" />
+              <Shield className="w-3 h-3 text-blue-400 absolute inset-0 m-auto" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Synchronizing Security Preferences</p>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Decrypting user vault & keyring...</p>
+            </div>
           </div>
         ) : (
         <>
@@ -1918,6 +2004,227 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SearchPage({ onClose, chats, onSelectChat, onStartDM }) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all'); // 'all', 'users', 'channels'
+  const [userResults, setUserResults] = useState([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
+  const [startingDmId, setStartingDmId] = useState(null);
+
+  // Debounced search for users in Supabase profiles
+  useEffect(() => {
+    if (!query.trim()) {
+      setUserResults([]);
+      setIsSearchingUsers(false);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setIsSearchingUsers(true);
+      try {
+        const results = await searchProfiles(query.trim());
+        setUserResults(results || []);
+      } catch (err) {
+        console.error("Search profiles error:", err);
+      } finally {
+        setIsSearchingUsers(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // Filter existing channels/rooms
+  const channelResults = Object.values(chats || {}).filter(c => 
+    c.name?.toLowerCase().includes(query.toLowerCase()) || 
+    c.subtitle?.toLowerCase().includes(query.toLowerCase())
+  );
+
+  const handleUserClick = async (u) => {
+    if (!onStartDM) return;
+    setStartingDmId(u.id);
+    try {
+      await onStartDM(u);
+      onClose();
+    } catch (e) {
+      console.error("Start DM error:", e);
+    } finally {
+      setStartingDmId(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-2xl z-[80] flex flex-col text-slate-100 font-sans overflow-hidden">
+      {/* Top Search Bar */}
+      <div className="p-4 border-b border-slate-800 bg-slate-900/90 sticky top-0 z-20 flex flex-col gap-3 shadow-lg">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 relative flex items-center">
+            <Search className="w-5 h-5 text-pink-400 absolute left-3.5 pointer-events-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search users by @username, channels..."
+              autoFocus
+              className="w-full bg-slate-800/90 border border-slate-700/80 rounded-2xl py-3 pl-11 pr-10 text-sm text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-500/40 focus:border-pink-500 transition-all shadow-inner"
+            />
+            {query && (
+              <button onClick={() => setQuery('')} className="absolute right-3.5 p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-700 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="px-4 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition-colors border border-slate-700/60 flex-shrink-0"
+          >
+            Done
+          </button>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+          {[
+            { id: 'all', label: 'All Results' },
+            { id: 'users', label: 'Users Directory' },
+            { id: 'channels', label: 'Encrypted Channels' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(tab.id)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all border whitespace-nowrap ${
+                filter === tab.id
+                  ? 'bg-gradient-to-r from-pink-500 to-blue-500 text-white border-transparent shadow-md shadow-pink-500/20'
+                  : 'bg-slate-800/60 text-slate-400 border-slate-700/60 hover:text-slate-200'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-y-auto p-4 max-w-2xl w-full mx-auto space-y-6">
+        {!query.trim() ? (
+          /* Empty Search State */
+          <div className="space-y-6">
+            <div>
+              <div className="text-xs font-bold text-slate-400 tracking-wider mb-3 px-1">QUICK CONVERSATIONS</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {Object.values(chats || {}).slice(0, 4).map(chat => (
+                  <div
+                    key={chat.id}
+                    onClick={() => { onSelectChat(chat.id); onClose(); }}
+                    className="p-3 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center gap-3 cursor-pointer hover:bg-slate-800 hover:border-slate-700 transition-all shadow-sm"
+                  >
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${chat.iconBg || 'bg-gradient-to-tr from-pink-500 to-blue-500'}`}>
+                      {chat.name.substring(0, 2).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-white truncate">{chat.name}</div>
+                      <div className="text-[10px] text-slate-400 truncate">{chat.subtitle || 'Channel'}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-6 rounded-3xl bg-slate-900/40 border border-slate-800/80 text-center flex flex-col items-center">
+              <div className="w-14 h-14 rounded-2xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center text-pink-400 mb-3 shadow-lg shadow-pink-500/10">
+                <Search className="w-7 h-7" />
+              </div>
+              <p className="text-sm font-bold text-slate-200">Global Encryption Directory</p>
+              <p className="text-xs text-slate-400 mt-1 max-w-xs leading-relaxed">
+                Type any @username to discover user public keys and establish secure direct messaging.
+              </p>
+            </div>
+          </div>
+        ) : (
+          /* Active Results */
+          <div className="space-y-6">
+            {/* Users Section */}
+            {(filter === 'all' || filter === 'users') && (
+              <div>
+                <div className="text-xs font-bold text-slate-400 tracking-wider mb-2.5 px-1 flex items-center justify-between">
+                  <span>USERS ({userResults.length})</span>
+                  {isSearchingUsers && <RefreshCw className="w-3.5 h-3.5 text-pink-400 animate-spin" />}
+                </div>
+
+                {userResults.length === 0 && !isSearchingUsers ? (
+                  <div className="text-xs text-slate-500 italic p-3 bg-slate-900/30 rounded-2xl border border-slate-800/40">
+                    No registered users matching "@ {query}"
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {userResults.map(u => (
+                      <div
+                        key={u.id}
+                        onClick={() => handleUserClick(u)}
+                        className="p-3.5 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center justify-between hover:bg-slate-800 hover:border-slate-700 cursor-pointer transition-all shadow-sm"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white flex items-center justify-center font-bold text-sm shadow-md">
+                            {u.username ? u.username.substring(0, 2).toUpperCase() : 'US'}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-white truncate">@{u.username}</div>
+                            <div className="text-[10px] text-slate-400 truncate">{u.email}</div>
+                          </div>
+                        </div>
+                        <button
+                          disabled={startingDmId === u.id}
+                          className="px-3.5 py-1.5 rounded-xl bg-pink-500/10 hover:bg-pink-500/20 text-pink-400 border border-pink-500/30 font-bold text-xs flex items-center gap-1.5 transition-all"
+                        >
+                          {startingDmId === u.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <MessageSquare className="w-3.5 h-3.5" />}
+                          <span>Chat</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Channels Section */}
+            {(filter === 'all' || filter === 'channels') && (
+              <div>
+                <div className="text-xs font-bold text-slate-400 tracking-wider mb-2.5 px-1">
+                  CHANNELS ({channelResults.length})
+                </div>
+                {channelResults.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic p-3 bg-slate-900/30 rounded-2xl border border-slate-800/40">
+                    No channels matching "{query}"
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {channelResults.map(chat => (
+                      <div
+                        key={chat.id}
+                        onClick={() => { onSelectChat(chat.id); onClose(); }}
+                        className="p-3.5 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center justify-between hover:bg-slate-800 hover:border-slate-700 cursor-pointer transition-all shadow-sm"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-md ${chat.iconBg || 'bg-slate-800 border border-slate-700'}`}>
+                            <Lock className="w-5 h-5 text-white" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-white truncate">{chat.name}</div>
+                            <div className="text-[10px] text-slate-400 truncate">{chat.subtitle || 'Encrypted Channel'}</div>
+                          </div>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

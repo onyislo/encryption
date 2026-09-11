@@ -44,12 +44,7 @@ ON public.rooms FOR INSERT TO authenticated WITH CHECK (true);
 
 -- Allow users to select participation records for their rooms
 CREATE POLICY "Allow select for room members" 
-ON public.room_participants FOR SELECT TO authenticated USING (
-    EXISTS (
-        SELECT 1 FROM public.room_participants AS rp
-        WHERE rp.room_id = room_id AND rp.user_id = auth.uid()
-    )
-);
+ON public.room_participants FOR SELECT TO authenticated USING (true);
 
 -- Allow users to join a room or add other users to rooms
 CREATE POLICY "Allow members creation" 

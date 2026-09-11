@@ -166,13 +166,7 @@ WITH CHECK (true);
 -- ROOM PARTICIPANTS --
 CREATE POLICY "room_participants_select"
 ON public.room_participants FOR SELECT TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM public.room_participants AS rp
-        WHERE rp.room_id = room_participants.room_id
-          AND rp.user_id = auth.uid()
-    )
-);
+USING (true);
 
 CREATE POLICY "room_participants_insert"
 ON public.room_participants FOR INSERT TO authenticated

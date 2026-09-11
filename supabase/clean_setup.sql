@@ -90,7 +90,7 @@ CREATE POLICY "profiles_update" ON public.profiles FOR UPDATE TO authenticated U
 CREATE POLICY "rooms_select" ON public.rooms FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.room_participants WHERE room_participants.room_id = rooms.id AND room_participants.user_id = auth.uid()));
 CREATE POLICY "rooms_insert" ON public.rooms FOR INSERT TO authenticated WITH CHECK (true);
 
-CREATE POLICY "room_participants_select" ON public.room_participants FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.room_participants AS rp WHERE rp.room_id = room_participants.room_id AND rp.user_id = auth.uid()));
+CREATE POLICY "room_participants_select" ON public.room_participants FOR SELECT TO authenticated USING (true);
 CREATE POLICY "room_participants_insert" ON public.room_participants FOR INSERT TO authenticated WITH CHECK (true);
 CREATE POLICY "room_participants_delete" ON public.room_participants FOR DELETE TO authenticated USING (user_id = auth.uid());
 
