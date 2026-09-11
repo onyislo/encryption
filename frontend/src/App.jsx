@@ -492,7 +492,7 @@ function App() {
               text: plaintext,
               encrypted: m.encrypted_content,
               time: new Date(m.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              type: (m.sender?.username === userProfile?.username) ? 'sent' : 'received',
+              type: (m.sender_id === userProfile?.id) ? 'sent' : 'received',
             };
           }));
 

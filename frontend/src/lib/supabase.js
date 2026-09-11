@@ -235,7 +235,8 @@ export async function fetchRoomMessages(roomId, limit = 50) {
       id,
       encrypted_content,
       created_at,
-      sender:profiles(username)
+      sender_id,
+      sender:profiles(id, username)
     `)
     .eq('room_id', roomId)
     .order('created_at', { ascending: true })
