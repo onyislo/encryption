@@ -1248,8 +1248,8 @@ function App() {
                  </div>
               </div>
               <div className="flex items-center gap-1.5 lg:gap-2 flex-shrink-0 ml-2">
-                 {/* Call Buttons - Only show for direct messages */}
-                 {activeChat.type === 'direct' && !isInCall && (
+                 {/* Call Buttons */}
+                 {!isInCall && (
                    <>
                      <button 
                        onClick={() => startCall('voice')}
