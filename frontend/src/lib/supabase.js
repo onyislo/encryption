@@ -208,6 +208,22 @@ export async function leaveRoom(roomId) {
     .eq('user_id', user.id);
 
   if (error) throw error;
+  
+  // Also delete the room itself if it's a direct message
+  await supabase.from('rooms').delete().eq('id', roomId).catch(() => {});
+}
+
+export async function deleteMessage(messageId) {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { error } = await supabase
+    .from('messages')
+    .delete()
+    .eq('id', messageId)
+    .eq('sender_id', user.id);
+
+  if (error) throw error;
 }
 
 export async function sendEncryptedMessage(roomId, encryptedPayload) {

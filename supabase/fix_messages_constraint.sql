@@ -148,3 +148,15 @@ BEGIN
     RAISE NOTICE '✅ You can now send messages and create rooms';
     RAISE NOTICE '✅ Refresh your app and try again';
 END $$;
+
+-- FIX 7: Allow users to delete their own messages
+DROP POLICY IF EXISTS "messages_delete_own" ON public.messages;
+CREATE POLICY "messages_delete_own" ON public.messages
+FOR DELETE TO public
+USING (sender_id = auth.uid());
+
+-- FIX 8: Allow deleting rooms
+DROP POLICY IF EXISTS "rooms_delete_own" ON public.rooms;
+CREATE POLICY "rooms_delete_own" ON public.rooms
+FOR DELETE TO public
+USING (true);

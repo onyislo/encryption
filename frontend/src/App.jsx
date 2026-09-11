@@ -25,7 +25,9 @@ import {
   fetchUserSettings,
   saveUserSettings,
   updateUserPassword,
-  deleteUserAccount
+  deleteUserAccount,
+  leaveRoom,
+  deleteMessage
 } from './lib/supabase';
 
 function App() {
@@ -59,14 +61,19 @@ function App() {
   
   // Call system state
   const [isInCall, setIsInCall] = useState(false);
-  const [callType, setCallType] = useState(null); // 'voice' or 'video'
+  const [callType, setCallType] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [callStatus, setCallStatus] = useState('idle'); // 'idle' | 'calling' | 'ringing' | 'connected'
+  const [msgContextMenu, setMsgContextMenu] = useState(null); // {msgId, x, y}
+  const [decryptedPreview, setDecryptedPreview] = useState(null); // {msgId, text}
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
+  const ringtoneRef = useRef(null);
+  const outboundRingRef = useRef(null);
 
   const getChatDisplayName = (chat) => {
     if (!chat) return '';
@@ -87,171 +94,225 @@ function App() {
     return chat.name || 'Encrypted Channel';
   };
 
-  // Call system functions
+  // ── Ringtone helpers ──────────────────────────────────────────
+  const playRingtone = (type) => {
+    // type: 'incoming' | 'outgoing'
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const playBeep = (freq, start, dur) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = freq;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + start);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+        osc.start(ctx.currentTime + start);
+        osc.stop(ctx.currentTime + start + dur);
+      };
+      if (type === 'incoming') {
+        // Ring ring ring pattern
+        let t = 0;
+        const interval = setInterval(() => {
+          playBeep(880, t, 0.15);
+          playBeep(660, t + 0.2, 0.15);
+          t += 0.5;
+        }, 500);
+        ringtoneRef.current = { interval, ctx };
+      } else {
+        // Outgoing: single long beep loop
+        let t = 0;
+        const interval = setInterval(() => {
+          playBeep(440, t, 0.3);
+          t += 1;
+        }, 1000);
+        outboundRingRef.current = { interval, ctx };
+      }
+    } catch (e) { /* audio not supported */ }
+  };
+
+  const stopRingtone = () => {
+    if (ringtoneRef.current) {
+      clearInterval(ringtoneRef.current.interval);
+      ringtoneRef.current.ctx?.close().catch(() => {});
+      ringtoneRef.current = null;
+    }
+    if (outboundRingRef.current) {
+      clearInterval(outboundRingRef.current.interval);
+      outboundRingRef.current.ctx?.close().catch(() => {});
+      outboundRingRef.current = null;
+    }
+  };
+
+  // ── Peer Connection ────────────────────────────────────────────
   const createPeerConnection = () => {
-    const configuration = {
+    const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' }
       ]
-    };
-    
-    const pc = new RTCPeerConnection(configuration);
-    
-    // Add local stream to peer connection
+    });
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current);
-      });
+      localStreamRef.current.getTracks().forEach(t => pc.addTrack(t, localStreamRef.current));
     }
-    
-    // Handle incoming remote stream
-    pc.ontrack = (event) => {
-      if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+    pc.ontrack = (e) => {
+      if (remoteVideoRef.current && e.streams[0]) {
+        remoteVideoRef.current.srcObject = e.streams[0];
       }
     };
-    
-    // Handle ICE candidates
-    pc.onicecandidate = async (event) => {
-      if (event.candidate && activeChatId) {
-        const candidateSignal = JSON.stringify({
-          type: 'ice-candidate',
-          candidate: event.candidate,
-          from: userProfile?.username
-        });
-        await sendEncryptedMessage(activeChatId, candidateSignal);
+    pc.onicecandidate = async (e) => {
+      if (e.candidate && activeChatId) {
+        await sendEncryptedMessage(activeChatId, JSON.stringify({
+          type: 'ice-candidate', candidate: e.candidate, from: userProfile?.username
+        })).catch(() => {});
       }
     };
-    
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        setCallStatus('connected');
+        stopRingtone();
+      }
+    };
     return pc;
   };
 
+  // ── Start Call ─────────────────────────────────────────────────
   const startCall = async (type) => {
     try {
       setCallType(type);
-      const constraints = {
-        audio: true,
-        video: type === 'video'
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      localStreamRef.current = stream;
-      
-      if (localVideoRef.current && type === 'video') {
-        localVideoRef.current.srcObject = stream;
-      }
-      
+      setCallStatus('calling');
       setIsInCall(true);
-      
-      // Create peer connection and offer
+      playRingtone('outgoing');
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+      localStreamRef.current = stream;
+      if (localVideoRef.current && type === 'video') localVideoRef.current.srcObject = stream;
+
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
-      
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      
-      // Send call signal with SDP offer
-      const callSignal = JSON.stringify({
-        type: 'call-start',
-        callType: type,
-        offer: offer,
-        from: userProfile?.username
-      });
-      
-      if (activeChatId) {
-        await sendEncryptedMessage(activeChatId, callSignal);
-      }
-      
+
+      await sendEncryptedMessage(activeChatId, JSON.stringify({
+        type: 'call-start', callType: type, offer, from: userProfile?.username
+      }));
     } catch (err) {
-      console.error('Error starting call:', err);
+      setIsInCall(false);
+      setCallStatus('idle');
+      stopRingtone();
       alert('Could not access camera/microphone. Please check permissions.');
     }
   };
 
-  const endCall = async () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+  // ── End Call ───────────────────────────────────────────────────
+  const endCall = async (notify = true) => {
+    stopRingtone();
+    localStreamRef.current?.getTracks().forEach(t => t.stop());
+    peerConnectionRef.current?.close();
+    if (notify && activeChatId) {
+      await sendEncryptedMessage(activeChatId, JSON.stringify({
+        type: 'call-end', from: userProfile?.username
+      })).catch(() => {});
     }
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-    }
-    
-    // Notify other person
-    if (activeChatId) {
-      const endSignal = JSON.stringify({
-        type: 'call-end',
-        from: userProfile?.username
-      });
-      await sendEncryptedMessage(activeChatId, endSignal).catch(() => {});
-    }
-    
     setIsInCall(false);
     setCallType(null);
     setIncomingCall(null);
+    setCallStatus('idle');
     setIsMuted(false);
     setIsVideoOff(false);
     localStreamRef.current = null;
     peerConnectionRef.current = null;
   };
 
+  // ── Answer Call ────────────────────────────────────────────────
   const answerCall = async () => {
     if (!incomingCall) return;
-    
+    stopRingtone();
     try {
-      const constraints = {
-        audio: true,
-        video: incomingCall.callType === 'video'
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true, video: incomingCall.callType === 'video'
+      });
       localStreamRef.current = stream;
-      
-      if (localVideoRef.current && incomingCall.callType === 'video') {
-        localVideoRef.current.srcObject = stream;
-      }
-      
+      if (localVideoRef.current && incomingCall.callType === 'video') localVideoRef.current.srcObject = stream;
+
       setIsInCall(true);
       setCallType(incomingCall.callType);
-      
-      // Create peer connection and answer
+      setCallStatus('connected');
+      setIncomingCall(null);
+
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
-      
       if (incomingCall.offer) {
         await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        
-        // Send answer signal
-        const answerSignal = JSON.stringify({
-          type: 'call-answer',
-          answer: answer,
-          from: userProfile?.username
-        });
-        
-        if (activeChatId) {
-          await sendEncryptedMessage(activeChatId, answerSignal);
-        }
+        await sendEncryptedMessage(activeChatId, JSON.stringify({
+          type: 'call-answer', answer, from: userProfile?.username
+        }));
       }
-      
-      setIncomingCall(null);
-      
     } catch (err) {
-      console.error('Error answering call:', err);
       alert('Could not access camera/microphone.');
     }
   };
 
+  // ── Decline Call ───────────────────────────────────────────────
   const declineCall = async () => {
+    stopRingtone();
     if (activeChatId) {
-      const declineSignal = JSON.stringify({
-        type: 'call-decline',
-        from: userProfile?.username
-      });
-      await sendEncryptedMessage(activeChatId, declineSignal).catch(() => {});
+      await sendEncryptedMessage(activeChatId, JSON.stringify({
+        type: 'call-decline', from: userProfile?.username
+      })).catch(() => {});
     }
     setIncomingCall(null);
+  };
+
+  // ── Delete Chat ────────────────────────────────────────────────
+  const handleDeleteChat = async (chatId) => {
+    if (!window.confirm('Delete this chat? This cannot be undone.')) return;
+    try {
+      await leaveRoom(chatId);
+      await loadUserRooms();
+      if (activeChatId === chatId) {
+        setActiveChatId(null);
+        setIsChatRoomActive(false);
+      }
+    } catch (err) {
+      alert('Failed to delete chat: ' + err.message);
+    }
+  };
+
+  // ── Delete Message ─────────────────────────────────────────────
+  const handleDeleteMessage = async (msgId, chatId) => {
+    if (!window.confirm('Delete this message?')) return;
+    try {
+      await deleteMessage(msgId);
+      setChats(prev => ({
+        ...prev,
+        [chatId]: {
+          ...prev[chatId],
+          messages: prev[chatId].messages.filter(m => m.id !== msgId)
+        }
+      }));
+    } catch (err) {
+      alert('Failed to delete message: ' + err.message);
+    }
+  };
+
+  // ── Decrypt Message Preview ────────────────────────────────────
+  const handleDecryptPreview = async (msg) => {
+    if (decryptedPreview?.msgId === msg.id) {
+      setDecryptedPreview(null);
+      return;
+    }
+    try {
+      let text = msg.text;
+      if (keys?.privateKey && msg.encrypted) {
+        text = await decryptMessage(keys.privateKey, msg.encrypted);
+      }
+      setDecryptedPreview({ msgId: msg.id, text });
+    } catch (e) {
+      setDecryptedPreview({ msgId: msg.id, text: msg.text });
+    }
   };
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -519,9 +580,9 @@ function App() {
           try {
             const parsed = JSON.parse(plaintext);
             
-            // Handle different call signals
             if (parsed.type === 'call-start' && newMsg.sender_id !== userProfile?.id) {
-              // Incoming call
+              // Incoming call - play ringtone
+              playRingtone('incoming');
               setIncomingCall({
                 from: parsed.from,
                 callType: parsed.callType,
@@ -531,7 +592,8 @@ function App() {
             } 
             
             if (parsed.type === 'call-answer' && newMsg.sender_id !== userProfile?.id) {
-              // Call answered - set remote description
+              stopRingtone();
+              setCallStatus('connected');
               if (peerConnectionRef.current && parsed.answer) {
                 await peerConnectionRef.current.setRemoteDescription(
                   new RTCSessionDescription(parsed.answer)
@@ -541,24 +603,22 @@ function App() {
             } 
             
             if (parsed.type === 'call-decline' && newMsg.sender_id !== userProfile?.id) {
-              // Call declined
+              stopRingtone();
               alert(`${parsed.from} declined the call`);
-              endCall();
+              endCall(false);
               return;
             }
             
-            if (parsed.type === 'call-end') {
-              // Call ended by other person
-              endCall();
+            if (parsed.type === 'call-end' && newMsg.sender_id !== userProfile?.id) {
+              endCall(false);
               return;
             }
             
             if (parsed.type === 'ice-candidate' && newMsg.sender_id !== userProfile?.id) {
-              // Handle ICE candidate
               if (peerConnectionRef.current && parsed.candidate) {
                 await peerConnectionRef.current.addIceCandidate(
                   new RTCIceCandidate(parsed.candidate)
-                );
+                ).catch(() => {});
               }
               return;
             }
@@ -1134,6 +1194,12 @@ function App() {
                               </div>
                             </div>
                             <ChevronRight className="w-5 h-5 text-slate-500 flex-shrink-0 ml-2" />
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.id); }}
+                              className="ml-1 p-1.5 rounded-xl text-rose-400 hover:bg-rose-950/50 transition-colors flex-shrink-0"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         );
                       })}
@@ -1268,6 +1334,15 @@ function App() {
                    </>
                  )}
                  
+                 {/* Delete Chat Button */}
+                 <button 
+                   onClick={() => handleDeleteChat(activeChatId)}
+                   className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-100 dark:hover:bg-rose-900/30 hover:text-rose-500 transition-colors active:scale-95"
+                   title="Delete Chat"
+                 >
+                   <Trash2 className="w-4 h-4" />
+                 </button>
+                 
                  <button 
                    onClick={() => setActiveTab(activeTab === 'raw' ? 'readable' : 'raw')} 
                    className={`px-2 lg:px-3 py-1 lg:py-1.5 rounded-lg lg:rounded-xl text-[10px] lg:text-xs font-bold flex items-center gap-1 lg:gap-1.5 transition-all border ${
@@ -1303,25 +1378,39 @@ function App() {
                {activeChat.messages && activeChat.messages.map((msg, idx) => {
                  const isSent = msg.type === 'sent';
                  const displayText = (activeTab === 'raw' && msg.encrypted) ? msg.encrypted : msg.text;
+                 const isDecrypted = decryptedPreview?.msgId === msg.id;
 
                  return (
-                   <div key={idx} className={`flex gap-2 ${isSent ? 'justify-end' : ''}`}>
+                   <div key={idx} className={`flex gap-2 ${isSent ? 'justify-end' : ''}`}
+                     onContextMenu={(e) => { e.preventDefault(); setMsgContextMenu({ msgId: msg.id, msg, x: e.clientX, y: e.clientY }); }}
+                     onTouchStart={() => {
+                       const timer = setTimeout(() => setMsgContextMenu({ msgId: msg.id, msg, x: 0, y: 0 }), 600);
+                       const cleanup = () => clearTimeout(timer);
+                       window.addEventListener('touchend', cleanup, { once: true });
+                     }}
+                   >
                      {!isSent && (
-                       <div className="w-7 h-7 lg:w-8 lg:h-8 rounded-full bg-gradient-to-tr from-pink-500 to-blue-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
+                       <div className="w-7 h-7 lg:w-8 lg:h-8 rounded-full bg-gradient-to-tr from-pink-500 to-blue-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-sm mt-1">
                           {msg.sender ? msg.sender.charAt(0).toUpperCase() : 'M'}
                        </div>
                      )}
-                     <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[80%] lg:max-w-lg`}>
+                     <div className={`flex flex-col ${isSent ? 'items-end' : ''} max-w-[75%] lg:max-w-lg`}>
                        {!isSent && (
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
                        )}
-                       <div className={`px-3 lg:px-4 py-2 lg:py-3 rounded-2xl text-xs lg:text-sm leading-relaxed shadow-sm break-words ${
+                       <div className={`px-3 lg:px-4 py-2 lg:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words whitespace-pre-wrap ${
                          isSent 
                            ? 'bg-gradient-to-r from-pink-500 to-blue-600 text-white rounded-tr-sm' 
-                           : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800 rounded-tl-sm'
-                       } ${activeTab === 'raw' && msg.encrypted ? 'font-mono text-[10px] lg:text-xs break-all bg-slate-900 dark:bg-slate-950 text-emerald-400 border-none' : ''}`}>
+                           : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700 rounded-tl-sm'
+                       }`}>
                          {displayText}
                        </div>
+                       {/* Decrypted preview */}
+                       {isDecrypted && (
+                         <div className="mt-1 px-3 py-2 rounded-xl bg-emerald-950/80 border border-emerald-700 text-emerald-300 text-xs max-w-full break-words">
+                           🔓 {decryptedPreview.text}
+                         </div>
+                       )}
                        <span className={`text-[9px] lg:text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
                          {msg.time} {isSent && <Check className="w-3 h-3 text-blue-400" />}
                        </span>
@@ -1330,28 +1419,52 @@ function App() {
                  );
                })}
 
-               {/* Live Ciphertext Stream - Only displayed when Raw Cipher tab mode is toggled */}
-               {activeTab === 'raw' && (
-                 <div className="bg-slate-900 text-slate-200 border border-slate-800 rounded-2xl p-5 shadow-lg max-w-2xl mx-auto w-full my-4">
-                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-3 tracking-wider">
-                      <span className="flex items-center gap-1.5 text-pink-400">
-                        <Lock className="w-3.5 h-3.5" /> REALTIME CIPHERTEXT STREAM
-                      </span>
-                      <span className="text-emerald-400 font-mono">END-TO-END ENCRYPTED</span>
-                    </div>
-                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 break-all shadow-inner min-h-[70px] flex flex-col justify-between">
-                       {lastEncrypted ? lastEncrypted : <span className="text-slate-500 italic">Type a message below to inspect RSA-OAEP Base64 payload...</span>}
-                       {lastEncrypted && (
-                          <div className="flex justify-end mt-3">
-                             <button type="button" onClick={copyToClipboard} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 hover:bg-slate-700 transition-colors">
-                                 <Copy className="w-3.5 h-3.5 text-pink-400" /> Copy Payload
-                             </button>
-                          </div>
-                       )}
-                    </div>
+               {/* Message Context Menu */}
+               {msgContextMenu && (
+                 <div 
+                   className="fixed inset-0 z-[150]" 
+                   onClick={() => setMsgContextMenu(null)}
+                 >
+                   <div 
+                     className="absolute bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-1 min-w-[180px] z-[151]"
+                     style={{ 
+                       top: msgContextMenu.y > 0 ? Math.min(msgContextMenu.y, window.innerHeight - 160) : '50%', 
+                       left: msgContextMenu.x > 0 ? Math.min(msgContextMenu.x, window.innerWidth - 200) : '50%',
+                       transform: msgContextMenu.x === 0 ? 'translate(-50%, -50%)' : 'none'
+                     }}
+                     onClick={e => e.stopPropagation()}
+                   >
+                     <button
+                       onClick={() => { handleDecryptPreview(msgContextMenu.msg); setMsgContextMenu(null); }}
+                       className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-slate-800 text-emerald-400 text-sm font-semibold transition-colors"
+                     >
+                       <Key className="w-4 h-4" /> Decrypt Message
+                     </button>
+                     <button
+                       onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); }}
+                       className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-slate-800 text-slate-300 text-sm font-semibold transition-colors"
+                     >
+                       <Copy className="w-4 h-4" /> Copy Text
+                     </button>
+                     {msgContextMenu.msg.type === 'sent' && (
+                       <button
+                         onClick={() => { handleDeleteMessage(msgContextMenu.msg.id, activeChatId); setMsgContextMenu(null); }}
+                         className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-rose-950/50 text-rose-400 text-sm font-semibold transition-colors"
+                       >
+                         <Trash2 className="w-4 h-4" /> Delete Message
+                       </button>
+                     )}
+                     <button
+                       onClick={() => setMsgContextMenu(null)}
+                       className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-slate-800 text-slate-500 text-sm transition-colors"
+                     >
+                       <X className="w-4 h-4" /> Cancel
+                     </button>
+                   </div>
                  </div>
                )}
 
+               {/* Scroll anchor */}
                <div ref={scrollRef}></div>
             </div>
 
@@ -1507,137 +1620,123 @@ function App() {
         publicKeyPem={publicKeyPem} 
       />
 
-      {/* Active Call Overlay */}
+      {/* ── ACTIVE CALL OVERLAY (WhatsApp-like) ── */}
       {isInCall && (
-        <div className="fixed inset-0 bg-slate-950 z-[200] flex flex-col">
-          {/* Call Header */}
-          <div className="p-4 flex items-center justify-between border-b border-slate-800">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-bold">
-                {getChatDisplayName(activeChat).substring(0, 2).toUpperCase()}
+        <div className="fixed inset-0 z-[200] flex flex-col bg-slate-900">
+          {/* Video area */}
+          {callType === 'video' ? (
+            <div className="flex-1 relative bg-black">
+              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+              {/* Local PiP */}
+              <div className="absolute top-4 right-4 w-28 h-40 rounded-2xl overflow-hidden border-2 border-white/20 shadow-xl">
+                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover mirror" />
               </div>
-              <div>
-                <h3 className="text-white font-bold">{getChatDisplayName(activeChat)}</h3>
-                <p className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  {callType === 'video' ? 'Video Call' : 'Voice Call'} · Connected
+              {/* Name + status overlay */}
+              <div className="absolute top-4 left-4 right-36">
+                <p className="text-white font-bold text-lg">{getChatDisplayName(activeChat)}</p>
+                <p className="text-white/70 text-xs">
+                  {callStatus === 'calling' ? 'Calling...' : callStatus === 'connected' ? 'Connected' : 'Connecting...'}
                 </p>
               </div>
             </div>
-            <button
-              onClick={endCall}
-              className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold text-sm transition-colors"
-            >
-              End Call
-            </button>
-          </div>
-
-          {/* Video Container */}
-          {callType === 'video' && (
-            <div className="flex-1 relative bg-slate-900">
-              {/* Remote Video (Main) */}
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-cover"
-              />
-              
-              {/* Local Video (Picture-in-Picture) */}
-              <div className="absolute bottom-4 right-4 w-32 h-48 lg:w-48 lg:h-64 rounded-2xl overflow-hidden border-2 border-slate-700 shadow-xl">
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover mirror"
-                />
+          ) : (
+            /* Voice call UI */
+            <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 relative">
+              <div className="absolute inset-0 bg-gradient-to-br from-pink-900/20 to-blue-900/20" />
+              <div className="relative">
+                <div className="w-28 h-28 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-black text-4xl shadow-2xl shadow-pink-500/30">
+                  {getChatDisplayName(activeChat).replace('@','').substring(0,2).toUpperCase()}
+                </div>
+                {callStatus !== 'connected' && (
+                  <div className="absolute -inset-3 rounded-full border-2 border-pink-400/30 animate-ping" />
+                )}
               </div>
+              <h2 className="text-white text-2xl font-bold mt-6 mb-1">{getChatDisplayName(activeChat)}</h2>
+              <p className="text-white/60 text-sm font-medium">
+                {callStatus === 'calling' ? '📞 Calling...' : callStatus === 'connected' ? '🟢 Connected' : 'Connecting...'}
+              </p>
             </div>
           )}
 
-          {/* Voice Call UI */}
-          {callType === 'voice' && (
-            <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-              <div className="w-32 h-32 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-black text-4xl mb-6 shadow-2xl animate-pulse">
-                {getChatDisplayName(activeChat).substring(0, 2).toUpperCase()}
-              </div>
-              <h2 className="text-2xl font-bold text-white mb-2">{getChatDisplayName(activeChat)}</h2>
-              <p className="text-emerald-400 text-sm font-semibold">Voice call in progress...</p>
-            </div>
-          )}
-
-          {/* Call Controls */}
-          <div className="p-6 flex items-center justify-center gap-4 bg-slate-900/80 backdrop-blur-md border-t border-slate-800">
+          {/* Controls */}
+          <div className="bg-slate-900/95 px-8 py-6 flex items-center justify-around border-t border-slate-800">
+            {/* Mute */}
             <button
               onClick={() => {
-                const audioTrack = localStreamRef.current?.getAudioTracks()[0];
-                if (audioTrack) {
-                  audioTrack.enabled = !audioTrack.enabled;
-                  setIsMuted(!audioTrack.enabled);
-                }
+                const track = localStreamRef.current?.getAudioTracks()[0];
+                if (track) { track.enabled = !track.enabled; setIsMuted(!track.enabled); }
               }}
-              className={`w-14 h-14 rounded-full ${isMuted ? 'bg-rose-500' : 'bg-slate-800'} hover:bg-slate-700 text-white flex items-center justify-center transition-colors`}
-              title={isMuted ? 'Unmute' : 'Mute'}
+              className={`flex flex-col items-center gap-1`}
             >
-              {isMuted ? <X className="w-6 h-6" /> : <Phone className="w-6 h-6" />}
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center ${isMuted ? 'bg-white text-slate-900' : 'bg-slate-700 text-white'}`}>
+                <Phone className="w-6 h-6" />
+              </div>
+              <span className="text-white/60 text-xs">{isMuted ? 'Unmute' : 'Mute'}</span>
             </button>
-            
-            {callType === 'video' && (
+
+            {/* End Call */}
+            <button onClick={() => endCall(true)} className="flex flex-col items-center gap-1">
+              <div className="w-16 h-16 rounded-full bg-rose-500 flex items-center justify-center shadow-lg shadow-rose-500/40">
+                <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+              </div>
+              <span className="text-white/60 text-xs">End</span>
+            </button>
+
+            {/* Camera toggle (video only) */}
+            {callType === 'video' ? (
               <button
                 onClick={() => {
-                  const videoTrack = localStreamRef.current?.getVideoTracks()[0];
-                  if (videoTrack) {
-                    videoTrack.enabled = !videoTrack.enabled;
-                    setIsVideoOff(!videoTrack.enabled);
-                  }
+                  const track = localStreamRef.current?.getVideoTracks()[0];
+                  if (track) { track.enabled = !track.enabled; setIsVideoOff(!track.enabled); }
                 }}
-                className={`w-14 h-14 rounded-full ${isVideoOff ? 'bg-rose-500' : 'bg-slate-800'} hover:bg-slate-700 text-white flex items-center justify-center transition-colors`}
-                title={isVideoOff ? 'Turn Video On' : 'Turn Video Off'}
+                className="flex flex-col items-center gap-1"
               >
-                <Video className="w-6 h-6" />
+                <div className={`w-14 h-14 rounded-full flex items-center justify-center ${isVideoOff ? 'bg-white text-slate-900' : 'bg-slate-700 text-white'}`}>
+                  <Video className="w-6 h-6" />
+                </div>
+                <span className="text-white/60 text-xs">{isVideoOff ? 'Cam On' : 'Cam Off'}</span>
               </button>
+            ) : (
+              <div className="w-14" />
             )}
-            
-            <button
-              onClick={endCall}
-              className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center transition-colors shadow-lg"
-              title="End Call"
-            >
-              <Phone className="w-7 h-7 rotate-[135deg]" />
-            </button>
           </div>
         </div>
       )}
 
-      {/* Incoming Call Notification */}
+      {/* ── INCOMING CALL (WhatsApp-like) ── */}
       {incomingCall && !isInCall && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
-          <div className="bg-slate-900 rounded-3xl p-8 max-w-sm w-full border border-slate-800 shadow-2xl">
-            <div className="flex flex-col items-center text-center">
-              <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-black text-3xl mb-4 animate-pulse">
-                {incomingCall.from?.substring(0, 2).toUpperCase() || 'CA'}
+        <div className="fixed inset-0 z-[250] flex flex-col items-center justify-between bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-8">
+          <div className="flex-1 flex flex-col items-center justify-center text-center">
+            <p className="text-white/60 text-sm mb-4 tracking-widest uppercase">
+              Incoming {incomingCall.callType === 'video' ? 'Video' : 'Voice'} Call
+            </p>
+            <div className="relative mb-6">
+              <div className="w-32 h-32 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white font-black text-4xl shadow-2xl">
+                {incomingCall.from?.substring(0,2).toUpperCase() || 'CA'}
               </div>
-              <h3 className="text-xl font-bold text-white mb-1">{incomingCall.from || 'Unknown'}</h3>
-              <p className="text-sm text-slate-400 mb-6">
-                Incoming {incomingCall.callType === 'video' ? 'video' : 'voice'} call...
-              </p>
-              
-              <div className="flex gap-3 w-full">
-                <button
-                  onClick={declineCall}
-                  className="flex-1 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-2xl font-bold transition-colors"
-                >
-                  Decline
-                </button>
-                <button
-                  onClick={answerCall}
-                  className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-bold transition-colors"
-                >
-                  Answer
-                </button>
-              </div>
+              <div className="absolute -inset-3 rounded-full border-2 border-pink-400/40 animate-ping" />
+              <div className="absolute -inset-6 rounded-full border border-pink-400/20 animate-ping" style={{animationDelay:'0.3s'}} />
             </div>
+            <h2 className="text-white text-3xl font-bold mb-2">{incomingCall.from}</h2>
+            <p className="text-white/50 text-sm">SecureChat · E2E Encrypted</p>
+          </div>
+
+          <div className="flex items-center justify-around w-full max-w-xs pb-8">
+            {/* Decline */}
+            <button onClick={declineCall} className="flex flex-col items-center gap-2">
+              <div className="w-16 h-16 rounded-full bg-rose-500 flex items-center justify-center shadow-lg shadow-rose-500/30">
+                <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+              </div>
+              <span className="text-white/60 text-sm">Decline</span>
+            </button>
+
+            {/* Answer */}
+            <button onClick={answerCall} className="flex flex-col items-center gap-2">
+              <div className="w-16 h-16 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/30 animate-bounce">
+                <Phone className="w-7 h-7 text-white" />
+              </div>
+              <span className="text-white/60 text-sm">Answer</span>
+            </button>
           </div>
         </div>
       )}
