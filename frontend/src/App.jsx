@@ -358,8 +358,14 @@ function App() {
     }
     try {
       let text = msg.text;
+      // Only decrypt if we have the raw encrypted content
       if (keys?.privateKey && msg.encrypted) {
-        text = await decryptMessage(keys.privateKey, msg.encrypted);
+        try {
+          text = await decryptMessage(keys.privateKey, msg.encrypted);
+        } catch (e) {
+          // If decryption fails, the message is already plaintext
+          text = msg.text;
+        }
       }
       setDecryptedPreview({ msgId: msg.id, text });
     } catch (e) {
@@ -1459,8 +1465,19 @@ function App() {
                        </div>
                        {/* Decrypted preview */}
                        {isDecrypted && (
-                         <div className="mt-1 px-3 py-2 rounded-xl bg-emerald-950/80 border border-emerald-700 text-emerald-300 text-xs max-w-full break-words">
-                           🔓 {decryptedPreview.text}
+                         <div className="mt-1 px-3 py-2 rounded-xl bg-slate-900 border border-emerald-700/50 text-xs max-w-full space-y-1.5">
+                           <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                             <Key className="w-3 h-3" /> Decrypted Text
+                           </div>
+                           <p className="text-emerald-300 break-words">{decryptedPreview.text}</p>
+                           {msg.encrypted && (
+                             <>
+                               <div className="flex items-center gap-1.5 text-pink-400 font-bold mt-2">
+                                 <Lock className="w-3 h-3" /> Raw Encrypted (RSA-2048)
+                               </div>
+                               <p className="text-pink-300/70 font-mono text-[9px] break-all line-clamp-3">{msg.encrypted}</p>
+                             </>
+                           )}
                          </div>
                        )}
                        <span className={`text-[9px] lg:text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
@@ -1490,7 +1507,8 @@ function App() {
                        onClick={() => { handleDecryptPreview(msgContextMenu.msg); setMsgContextMenu(null); }}
                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-slate-800 text-emerald-400 text-sm font-semibold transition-colors"
                      >
-                       <Key className="w-4 h-4" /> Decrypt Message
+                       <Key className="w-4 h-4" /> 
+                       {decryptedPreview?.msgId === msgContextMenu.msgId ? 'Hide Decrypted' : 'Decrypt Message'}
                      </button>
                      <button
                        onClick={() => { navigator.clipboard.writeText(msgContextMenu.msg.text); setMsgContextMenu(null); }}
