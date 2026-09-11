@@ -1057,25 +1057,35 @@ function App() {
         )}
       </div>
 
-      {/* Floating Mobile Bottom Navigation Bar - HIDDEN when chatting inside an active chat room */}
+      {/* Floating Mobile Bottom Navigation Bar - Sleek & Imported Everywhere on Mobile */}
       {!isChatRoomActive && !isAppLocked && (
-        <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-xl border border-slate-800/90 rounded-full shadow-2xl z-40 px-3 py-2 flex items-center justify-around text-slate-400">
+        <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-2xl border border-slate-800/90 rounded-3xl shadow-2xl shadow-pink-500/10 z-[100] px-3 py-2 flex items-center justify-around text-slate-400 transition-all">
           <button 
             onClick={() => {
-              setIsChatRoomActive(false);
               setIsSearchOpen(false);
               setIsSettingsOpen(false);
-              setIsMobileMenuOpen(false);
+              setIsChatRoomActive(false);
             }} 
-            className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${!isChatRoomActive && !isSearchOpen && !isSettingsOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+              !isSearchOpen && !isSettingsOpen && !isChatRoomActive 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                : 'hover:text-white hover:bg-slate-800/50'
+            }`}
           >
             <MessageSquare className="w-5 h-5" />
             <span>Chats</span>
           </button>
 
           <button 
-            onClick={() => setIsSearchOpen(true)} 
-            className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSearchOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+            onClick={() => {
+              setIsSettingsOpen(false);
+              setIsSearchOpen(true);
+            }} 
+            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+              isSearchOpen 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                : 'hover:text-white hover:bg-slate-800/50'
+            }`}
           >
             <Search className="w-5 h-5" />
             <span>Search</span>
@@ -1083,7 +1093,7 @@ function App() {
 
           <button 
             onClick={() => setIsNewRoomModalOpen(true)} 
-            className="w-10 h-10 -mt-5 bg-gradient-to-tr from-pink-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-pink-500/30 active:scale-95 transition-transform"
+            className="w-11 h-11 -mt-6 bg-gradient-to-tr from-pink-500 via-purple-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-xl shadow-pink-500/30 hover:scale-105 active:scale-95 transition-transform border-2 border-slate-900"
             title="Create Room"
           >
             <Plus className="w-6 h-6" />
@@ -1091,15 +1101,26 @@ function App() {
 
           <button 
             onClick={() => setIsCryptoModalOpen(true)} 
-            className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-pink-400 transition-all"
+            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+              isCryptoModalOpen 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                : 'hover:text-white hover:bg-slate-800/50'
+            }`}
           >
             <Key className="w-5 h-5" />
             <span>Crypto</span>
           </button>
 
           <button 
-            onClick={() => setIsSettingsOpen(true)} 
-            className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSettingsOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+            onClick={() => {
+              setIsSearchOpen(false);
+              setIsSettingsOpen(true);
+            }} 
+            className={`px-3.5 py-1.5 rounded-2xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
+              isSettingsOpen 
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10 scale-105' 
+                : 'hover:text-white hover:bg-slate-800/50'
+            }`}
             title="Settings"
           >
             <Settings className="w-5 h-5" />
@@ -1733,7 +1754,7 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
   );
 
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-50 dark:bg-slate-950 dark:text-slate-100 overflow-y-auto font-sans transition-colors">
+    <div className="fixed inset-0 z-[60] bg-slate-50 dark:bg-slate-950 dark:text-slate-100 overflow-y-auto font-sans transition-colors pb-28">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] bg-slate-900 text-white dark:bg-white dark:text-slate-900 text-xs font-bold px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-top-4">
@@ -2342,7 +2363,7 @@ function SearchPage({ onClose, chats, onSelectChat, onStartDM }) {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-4 max-w-2xl w-full mx-auto space-y-6">
+      <div className="flex-1 overflow-y-auto p-4 max-w-2xl w-full mx-auto space-y-6 pb-28">
         {!query.trim() ? (
           /* Empty Search State */
           <div className="space-y-6">
