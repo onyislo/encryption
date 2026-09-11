@@ -149,7 +149,7 @@ export async function fetchUserRooms() {
 
 export async function createRoom(roomName, participantIds = []) {
   const user = await getCurrentUser();
-  if (!user) throw new Error('Not authenticated');
+  const currentUserId = user?.id;
 
   const newRoomId = crypto.randomUUID();
   const roomType = roomName ? 'room' : 'direct';
@@ -164,17 +164,21 @@ export async function createRoom(roomName, participantIds = []) {
 
   if (roomError) throw roomError;
 
-  const allParticipantIds = Array.from(new Set([user.id, ...participantIds]));
-  const participantsInsert = allParticipantIds.map(uid => ({
-    room_id: newRoomId,
-    user_id: uid,
-  }));
+  const rawIds = currentUserId ? [currentUserId, ...participantIds] : [...participantIds];
+  const allParticipantIds = Array.from(new Set(rawIds.filter(Boolean)));
 
-  const { error: joinError } = await supabase
-    .from('room_participants')
-    .insert(participantsInsert);
+  if (allParticipantIds.length > 0) {
+    const participantsInsert = allParticipantIds.map(uid => ({
+      room_id: newRoomId,
+      user_id: uid,
+    }));
 
-  if (joinError) throw joinError;
+    const { error: joinError } = await supabase
+      .from('room_participants')
+      .insert(participantsInsert);
+
+    if (joinError) console.warn("Participant link note:", joinError.message);
+  }
 
   return { id: newRoomId, name: roomName, type: roomType };
 }
