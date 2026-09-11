@@ -55,6 +55,26 @@ function App() {
   const [isCryptoModalOpen, setIsCryptoModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isChatRoomActive, setIsChatRoomActive] = useState(false);
+
+  const getChatDisplayName = (chat) => {
+    if (!chat) return '';
+    if (chat.type === 'direct') {
+      const other = chat.participants?.find(p => p.id !== userProfile?.id && p.id !== 'unknown' && p.name !== 'User');
+      if (other?.name) {
+        return other.name.startsWith('@') ? other.name : `@${other.name}`;
+      }
+      if (chat.name && chat.name !== 'Direct Message' && chat.name !== 'Direct Channel' && chat.name !== 'Direct Chat') {
+        return chat.name.startsWith('@') ? chat.name : `@${chat.name}`;
+      }
+      const anyOther = chat.participants?.find(p => p.id !== userProfile?.id);
+      if (anyOther?.name && anyOther.name !== 'User') {
+        return anyOther.name.startsWith('@') ? anyOther.name : `@${anyOther.name}`;
+      }
+      return chat.name || 'Direct Message';
+    }
+    return chat.name || 'Encrypted Channel';
+  };
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return localStorage.getItem('theme') === 'dark';
@@ -152,18 +172,28 @@ function App() {
       if (rooms && rooms.length > 0) {
         const formattedChats = {};
         rooms.forEach(r => {
+          const parsedParticipants = [];
+          if (Array.isArray(r.participants)) {
+            r.participants.forEach(p => {
+              const u = p.user || p.profiles || p;
+              if (u && (u.id || u.username)) {
+                parsedParticipants.push({
+                  id: u.id || 'unknown',
+                  name: u.username || u.name || 'User',
+                  avatar: `https://i.pravatar.cc/150?u=${u.id || 'default'}`,
+                  online: true,
+                });
+              }
+            });
+          }
+
           formattedChats[r.id] = {
             id: r.id,
             name: r.name || 'Direct Channel',
             type: r.type,
             subtitle: r.type === 'room' ? 'Encrypted Group' : 'Direct Message',
             iconBg: r.type === 'room' ? 'bg-blue-600' : 'bg-pink-600',
-            participants: r.participants ? r.participants.map(p => ({
-              id: p.user?.id || 'unknown',
-              name: p.user?.username || 'User',
-              avatar: `https://i.pravatar.cc/150?u=${p.user?.id || 'default'}`,
-              online: true,
-            })) : [],
+            participants: parsedParticipants,
             messages: []
           };
         });
@@ -300,9 +330,11 @@ function App() {
       if (room) {
         await loadUserRooms();
         setActiveChatId(room.id);
+        setIsChatRoomActive(true);
         setSearchQuery('');
         setSearchResults([]);
         setIsMobileMenuOpen(false);
+        setIsSearchOpen(false);
       }
     } catch (err) {
       alert(`Could not start conversation: ${err.message}`);
@@ -621,16 +653,21 @@ function App() {
                 .map(chat => {
                   const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
                   const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
+                  const displayName = getChatDisplayName(chat);
                   return (
                     <SidebarItem 
                       key={chat.id}
                       icon={<User className="w-4 h-4 text-white" />} 
                       iconBg={chat.iconBg || "bg-pink-600"} 
-                      title={chat.name} 
+                      title={displayName} 
                       subtitle={isUserOnline ? '🟢 Online' : '⚪ Offline'}
                       active={activeChatId === chat.id} 
                       isOnline={isUserOnline}
-                      onClick={() => { setActiveChatId(chat.id); setIsMobileMenuOpen(false); }} 
+                      onClick={() => {
+                        setActiveChatId(chat.id);
+                        setIsChatRoomActive(true);
+                        setIsMobileMenuOpen(false);
+                      }} 
                     />
                   );
                 })}
@@ -655,9 +692,9 @@ function App() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
+      {/* Main Area */}
       <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 relative overflow-hidden pb-16 lg:pb-0">
-        {/* Clean Mobile Header - No useless top menu button */}
+        {/* Mobile Header */}
         <div className="lg:hidden h-14 bg-slate-900 border-b border-slate-800 text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white shadow-md shadow-blue-500/20">
@@ -689,22 +726,216 @@ function App() {
           </div>
         </div>
 
+        {/* Mobile Dedicated Chats Page (shown when user is on mobile & not inside an active chat conversation) */}
+        {!isChatRoomActive && (
+          <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-20">
+            {/* Header / Current User Bar */}
+            <div className="p-4 border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white flex items-center justify-center font-bold text-sm shadow-lg shadow-pink-500/20">
+                  {userProfile?.username?.substring(0, 2).toUpperCase() || 'ME'}
+                </div>
+                <div>
+                  <h1 className="text-lg font-black text-white leading-tight">Chats</h1>
+                  <div className="text-[10px] text-slate-400 font-semibold flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    @{userProfile?.username} · Active
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsNewRoomModalOpen(true)}
+                className="px-3 py-2 rounded-2xl bg-slate-800 border border-slate-700/60 text-slate-200 hover:text-white hover:bg-slate-700 transition-all active:scale-95 flex items-center gap-1.5 text-xs font-bold"
+              >
+                <Plus className="w-4 h-4 text-pink-400" />
+                <span>New Room</span>
+              </button>
+            </div>
+
+            {/* Quick Live Search Bar */}
+            <div className="p-4 pb-2 relative">
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder="Search chats or start DM @username..." 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-900/90 border border-slate-800 rounded-2xl py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-500/40 transition-all shadow-inner" 
+                />
+                {isSearching && <RefreshCw className="w-3.5 h-3.5 absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 animate-spin" />}
+              </div>
+
+              {/* Live Search Popup */}
+              {searchQuery.trim().length > 0 && (
+                <div className="mt-2 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2 max-h-60 overflow-y-auto z-30">
+                  <div className="text-[10px] font-bold text-slate-400 px-2 py-1 tracking-wider">USERS FOUND</div>
+                  {searchResults.length === 0 && !isSearching && (
+                    <div className="p-3 text-center text-xs text-slate-400">No user found matching "@{searchQuery}"</div>
+                  )}
+                  {searchResults.map(u => {
+                    const isOnline = onlineUserIds.includes(u.id);
+                    return (
+                      <div 
+                        key={u.id}
+                        onClick={() => handleSelectUserToChat(u)}
+                        className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-pink-500 to-blue-500 text-white font-bold text-xs flex items-center justify-center shadow-md">
+                              {u.username?.substring(0, 2).toUpperCase() || 'U'}
+                            </div>
+                            <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-slate-900 ${isOnline ? 'bg-emerald-500' : 'bg-slate-500'}`} />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white">@{u.username}</div>
+                            <div className="text-[10px] text-slate-400">Tap to chat</div>
+                          </div>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${isOnline ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800' : 'bg-slate-800 text-slate-400'}`}>
+                          {isOnline ? 'Online' : 'Offline'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Mobile Chats List */}
+            <div className="flex-1 overflow-y-auto px-4 py-2 space-y-5">
+              {/* Direct Messages / People */}
+              <div>
+                <div className="text-[11px] font-extrabold text-slate-400 tracking-wider mb-2.5 flex items-center justify-between">
+                  <span>PEOPLE & DIRECT CHATS ({Object.values(chats).filter(c => c.type === 'direct').length})</span>
+                  <span className="text-[10px] font-normal text-slate-500">Tap to open chat</span>
+                </div>
+
+                {Object.values(chats).filter(c => c.type === 'direct').length === 0 ? (
+                  <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 text-center">
+                    <User className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+                    <p className="text-xs font-bold text-slate-300">No Direct Messages</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Search @username above to start chatting with people!</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {Object.values(chats)
+                      .filter(chat => chat.type === 'direct')
+                      .map(chat => {
+                        const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
+                        const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
+                        const displayName = getChatDisplayName(chat);
+                        const lastMsg = chat.messages?.[chat.messages.length - 1];
+
+                        return (
+                          <div
+                            key={chat.id}
+                            onClick={() => {
+                              setActiveChatId(chat.id);
+                              setIsChatRoomActive(true);
+                            }}
+                            className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between cursor-pointer active:scale-[0.98] ${
+                              activeChatId === chat.id 
+                                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 border-pink-500/50 text-white' 
+                                : 'bg-slate-900/80 border-slate-800 hover:bg-slate-800/80 text-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3.5 overflow-hidden">
+                              <div className="relative flex-shrink-0">
+                                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-indigo-600 text-white font-bold text-sm flex items-center justify-center shadow-md">
+                                  {displayName.replace('@', '').substring(0, 2).toUpperCase() || 'U'}
+                                </div>
+                                <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-slate-950 ${isUserOnline ? 'bg-emerald-500' : 'bg-slate-500'}`} />
+                              </div>
+                              <div className="overflow-hidden">
+                                <div className="text-sm font-bold text-white truncate">{displayName}</div>
+                                <div className="text-xs text-slate-400 truncate mt-0.5">
+                                  {lastMsg ? lastMsg.text : (isUserOnline ? '🟢 Online now' : '⚪ Offline')}
+                                </div>
+                              </div>
+                            </div>
+                            <ChevronRight className="w-5 h-5 text-slate-500 flex-shrink-0 ml-2" />
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+
+              {/* Chat Rooms */}
+              <div>
+                <div className="text-[11px] font-extrabold text-slate-400 tracking-wider mb-2.5 flex items-center justify-between">
+                  <span>CHAT ROOMS ({Object.values(chats).filter(c => c.type === 'room').length})</span>
+                  <button onClick={() => setIsNewRoomModalOpen(true)} className="text-[10px] font-bold text-pink-400 hover:underline">
+                    + Create
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {Object.values(chats)
+                    .filter(chat => chat.type === 'room')
+                    .map(chat => (
+                      <div
+                        key={chat.id}
+                        onClick={() => {
+                          setActiveChatId(chat.id);
+                          setIsChatRoomActive(true);
+                        }}
+                        className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between cursor-pointer active:scale-[0.98] ${
+                          activeChatId === chat.id 
+                            ? 'bg-gradient-to-r from-blue-500/20 to-indigo-500/20 border-blue-500/50 text-white' 
+                            : 'bg-slate-900/80 border-slate-800 hover:bg-slate-800/80 text-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3.5 overflow-hidden">
+                          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 to-cyan-500 text-white flex items-center justify-center shadow-md flex-shrink-0">
+                            <Lock className="w-5 h-5" />
+                          </div>
+                          <div className="overflow-hidden">
+                            <div className="text-sm font-bold text-white truncate">{chat.name}</div>
+                            <div className="text-xs text-slate-400 truncate mt-0.5">Encrypted Group Channel</div>
+                          </div>
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-slate-500 flex-shrink-0 ml-2" />
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Active Chat Conversation Area */}
         {activeChat ? (
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className={`flex-1 flex flex-col overflow-hidden ${!isChatRoomActive ? 'hidden lg:flex' : 'flex'}`}>
             {/* Top Bar */}
             <div className="h-16 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 sticky top-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md z-10">
               <div className="flex items-center gap-3">
-                 <button className="hidden lg:hidden text-slate-600 dark:text-slate-300" onClick={() => setIsMobileMenuOpen(true)}>
-                    <Menu className="w-6 h-6" />
+                 <button 
+                   className="lg:hidden p-2 -ml-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
+                   onClick={() => setIsChatRoomActive(false)}
+                   title="Back to Conversations"
+                 >
+                    <ChevronLeft className="w-5 h-5" />
                  </button>
-                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-sm ${activeChat.iconBg || 'bg-slate-100'}`}>
-                    <Lock className="w-5 h-5 text-white" />
+                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${activeChat.iconBg || 'bg-gradient-to-tr from-pink-500 to-indigo-600'}`}>
+                    {activeChat.type === 'room' ? (
+                      <Lock className="w-5 h-5 text-white" />
+                    ) : (
+                      <span className="text-sm font-black">
+                        {getChatDisplayName(activeChat).replace('@', '').substring(0, 2).toUpperCase() || 'U'}
+                      </span>
+                    )}
                  </div>
                  <div>
-                   <h2 className="font-bold text-slate-800 dark:text-white leading-tight text-sm md:text-base">{activeChat.name}</h2>
+                   <h2 className="font-bold text-slate-800 dark:text-white leading-tight text-sm md:text-base">
+                     {getChatDisplayName(activeChat)}
+                   </h2>
                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium text-[11px]">
-                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> RSA-2048 E2E Active
+                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                       {activeChat.type === 'direct' ? 'Direct Chat · E2E Active' : 'RSA-2048 E2E Active'}
                      </span>
                    </div>
                  </div>
@@ -811,7 +1042,7 @@ function App() {
             </form>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-slate-950">
+          <div className="hidden lg:flex flex-1 flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-slate-950">
             <div className="w-16 h-16 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-blue-500 shadow-md mb-4">
               <Lock className="w-8 h-8" />
             </div>
@@ -826,52 +1057,56 @@ function App() {
         )}
       </div>
 
-      {/* Floating Mobile Bottom Navigation Bar */}
-      <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-xl border border-slate-800/90 rounded-full shadow-2xl z-40 px-3 py-2 flex items-center justify-around text-slate-400">
-        <button 
-          onClick={() => {
-            setIsSearchOpen(false);
-            setIsMobileMenuOpen(true);
-          }} 
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isMobileMenuOpen && !isSearchOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
-        >
-          <MessageSquare className="w-5 h-5" />
-          <span>Chats</span>
-        </button>
+      {/* Floating Mobile Bottom Navigation Bar - HIDDEN when chatting inside an active chat room */}
+      {!isChatRoomActive && !isAppLocked && (
+        <div className="lg:hidden fixed bottom-3 left-3 right-3 bg-slate-900/95 backdrop-blur-xl border border-slate-800/90 rounded-full shadow-2xl z-40 px-3 py-2 flex items-center justify-around text-slate-400">
+          <button 
+            onClick={() => {
+              setIsChatRoomActive(false);
+              setIsSearchOpen(false);
+              setIsSettingsOpen(false);
+              setIsMobileMenuOpen(false);
+            }} 
+            className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${!isChatRoomActive && !isSearchOpen && !isSettingsOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+          >
+            <MessageSquare className="w-5 h-5" />
+            <span>Chats</span>
+          </button>
 
-        <button 
-          onClick={() => setIsSearchOpen(true)} 
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSearchOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
-        >
-          <Search className="w-5 h-5" />
-          <span>Search</span>
-        </button>
+          <button 
+            onClick={() => setIsSearchOpen(true)} 
+            className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSearchOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+          >
+            <Search className="w-5 h-5" />
+            <span>Search</span>
+          </button>
 
-        <button 
-          onClick={() => setIsNewRoomModalOpen(true)} 
-          className="w-10 h-10 -mt-5 bg-gradient-to-tr from-pink-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-pink-500/30 active:scale-95 transition-transform"
-          title="Create Room"
-        >
-          <Plus className="w-6 h-6" />
-        </button>
+          <button 
+            onClick={() => setIsNewRoomModalOpen(true)} 
+            className="w-10 h-10 -mt-5 bg-gradient-to-tr from-pink-500 to-blue-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-pink-500/30 active:scale-95 transition-transform"
+            title="Create Room"
+          >
+            <Plus className="w-6 h-6" />
+          </button>
 
-        <button 
-          onClick={() => setIsCryptoModalOpen(true)} 
-          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-pink-400 transition-all"
-        >
-          <Key className="w-5 h-5" />
-          <span>Crypto</span>
-        </button>
+          <button 
+            onClick={() => setIsCryptoModalOpen(true)} 
+            className="flex flex-col items-center gap-0.5 text-[10px] font-semibold hover:text-pink-400 transition-all"
+          >
+            <Key className="w-5 h-5" />
+            <span>Crypto</span>
+          </button>
 
-        <button 
-          onClick={() => setIsSettingsOpen(true)} 
-          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSettingsOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
-          title="Settings"
-        >
-          <Settings className="w-5 h-5" />
-          <span>Settings</span>
-        </button>
-      </div>
+          <button 
+            onClick={() => setIsSettingsOpen(true)} 
+            className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all ${isSettingsOpen ? 'text-pink-400 font-bold scale-105' : 'hover:text-white'}`}
+            title="Settings"
+          >
+            <Settings className="w-5 h-5" />
+            <span>Settings</span>
+          </button>
+        </div>
+      )}
 
       {/* New Room Modal */}
       {isNewRoomModalOpen && (
