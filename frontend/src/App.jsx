@@ -96,50 +96,102 @@ function App() {
 
   // ── Ringtone helpers ──────────────────────────────────────────
   const playRingtone = (type) => {
-    // type: 'incoming' | 'outgoing'
+    stopRingtone(); // stop any existing
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const playBeep = (freq, start, dur) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = freq;
-        osc.type = 'sine';
-        gain.gain.setValueAtTime(0.3, ctx.currentTime + start);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
-        osc.start(ctx.currentTime + start);
-        osc.stop(ctx.currentTime + start + dur);
-      };
+
       if (type === 'incoming') {
-        // Ring ring ring pattern
-        let t = 0;
+        // Classic phone ring: two short bursts, pause, repeat
+        let time = ctx.currentTime;
+        const scheduleRing = () => {
+          for (let i = 0; i < 6; i++) {
+            // First burst
+            const osc1 = ctx.createOscillator();
+            const gain1 = ctx.createGain();
+            osc1.connect(gain1); gain1.connect(ctx.destination);
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(1400, time + i * 0.05);
+            gain1.gain.setValueAtTime(0, time + i * 0.05);
+            gain1.gain.linearRampToValueAtTime(0.5, time + i * 0.05 + 0.01);
+            gain1.gain.linearRampToValueAtTime(0, time + i * 0.05 + 0.04);
+            osc1.start(time + i * 0.05);
+            osc1.stop(time + i * 0.05 + 0.05);
+
+            // Second burst (slightly lower)
+            const osc2 = ctx.createOscillator();
+            const gain2 = ctx.createGain();
+            osc2.connect(gain2); gain2.connect(ctx.destination);
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(1200, time + i * 0.05 + 0.025);
+            gain2.gain.setValueAtTime(0, time + i * 0.05 + 0.025);
+            gain2.gain.linearRampToValueAtTime(0.4, time + i * 0.05 + 0.03);
+            gain2.gain.linearRampToValueAtTime(0, time + i * 0.05 + 0.05);
+            osc2.start(time + i * 0.05 + 0.025);
+            osc2.stop(time + i * 0.05 + 0.05);
+          }
+        };
+        scheduleRing();
+        // Repeat every 3 seconds
         const interval = setInterval(() => {
-          playBeep(880, t, 0.15);
-          playBeep(660, t + 0.2, 0.15);
-          t += 0.5;
-        }, 500);
+          time = ctx.currentTime;
+          scheduleRing();
+        }, 3000);
         ringtoneRef.current = { interval, ctx };
+
       } else {
-        // Outgoing: single long beep loop
-        let t = 0;
+        // Outgoing: classic phone dialing ring tone (DRRRRING...)
+        // Long ring then silence then repeat - exactly like calling someone
+        const scheduleOutgoing = (startTime) => {
+          // Main ring tone - two oscillators for richer sound
+          const duration = 1.5;
+          
+          const osc1 = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const gainNode = ctx.createGain();
+          
+          osc1.connect(gainNode);
+          osc2.connect(gainNode);
+          gainNode.connect(ctx.destination);
+
+          osc1.type = 'sine';
+          osc1.frequency.setValueAtTime(480, startTime);
+          
+          osc2.type = 'sine';
+          osc2.frequency.setValueAtTime(440, startTime);
+
+          // Envelope: quick attack, sustain, quick release
+          gainNode.gain.setValueAtTime(0, startTime);
+          gainNode.gain.linearRampToValueAtTime(0.4, startTime + 0.05);
+          gainNode.gain.setValueAtTime(0.4, startTime + duration - 0.05);
+          gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
+
+          osc1.start(startTime);
+          osc1.stop(startTime + duration);
+          osc2.start(startTime);
+          osc2.stop(startTime + duration);
+        };
+
+        // Play immediately then every 4 seconds (1.5s ring + 2.5s silence)
+        scheduleOutgoing(ctx.currentTime);
         const interval = setInterval(() => {
-          playBeep(440, t, 0.3);
-          t += 1;
-        }, 1000);
+          scheduleOutgoing(ctx.currentTime);
+        }, 4000);
         outboundRingRef.current = { interval, ctx };
       }
-    } catch (e) { /* audio not supported */ }
+    } catch (e) {
+      console.warn('Audio not supported:', e);
+    }
   };
 
   const stopRingtone = () => {
     if (ringtoneRef.current) {
       clearInterval(ringtoneRef.current.interval);
-      ringtoneRef.current.ctx?.close().catch(() => {});
+      try { ringtoneRef.current.ctx?.close(); } catch(e) {}
       ringtoneRef.current = null;
     }
     if (outboundRingRef.current) {
       clearInterval(outboundRingRef.current.interval);
-      outboundRingRef.current.ctx?.close().catch(() => {});
+      try { outboundRingRef.current.ctx?.close(); } catch(e) {}
       outboundRingRef.current = null;
     }
   };
