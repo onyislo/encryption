@@ -1107,24 +1107,32 @@ function App() {
             let displayText = m.encrypted_content;
             let isCallSignal = false;
 
+            // 1. Check raw JSON payload
             try {
-              const decoded = decodeURIComponent(escape(atob(m.encrypted_content)));
-              const parsed = JSON.parse(decoded);
-              if (parsed && parsed.type && CALL_TYPES.includes(parsed.type)) {
+              const directParsed = JSON.parse(m.encrypted_content);
+              if (directParsed && directParsed.type && CALL_TYPES.includes(directParsed.type)) {
                 isCallSignal = true;
               }
-              if (isMine && !isCallSignal) {
-                displayText = decoded;
-              }
-            } catch (e) {
-              if (isMine) {
-                try { displayText = decodeURIComponent(escape(atob(m.encrypted_content))); }
-                catch { displayText = m.encrypted_content; }
-              }
+            } catch (e) {}
+
+            // 2. Check base64-decoded JSON payload
+            if (!isCallSignal) {
+              try {
+                const decoded = decodeURIComponent(escape(atob(m.encrypted_content)));
+                const base64Parsed = JSON.parse(decoded);
+                if (base64Parsed && base64Parsed.type && CALL_TYPES.includes(base64Parsed.type)) {
+                  isCallSignal = true;
+                }
+              } catch (e) {}
             }
 
             if (isCallSignal) {
-              continue; // Filter out raw WebRTC signal messages from chat timeline!
+              continue; // ⛔ Filter out raw WebRTC call signal messages from chat timeline!
+            }
+
+            if (isMine) {
+              try { displayText = decodeURIComponent(escape(atob(m.encrypted_content))); }
+              catch { displayText = m.encrypted_content; }
             }
 
             loadedMsgs.push({
@@ -2003,6 +2011,24 @@ function App() {
 
                {activeChat.messages && activeChat.messages.map((msg, idx) => {
                  const isSent = msg.type === 'sent';
+                 const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+
+                 // ⛔ DISCARD & NEVER RENDER RAW WEBRTC CALL SIGNALS IN THE TIMELINE
+                 let isCallSignal = false;
+                 try {
+                   const raw = msg.encrypted || msg.text;
+                   let parsed = null;
+                   try { parsed = JSON.parse(raw); } catch {
+                     try { parsed = JSON.parse(decodeURIComponent(escape(atob(raw)))); } catch {}
+                   }
+                   if (parsed && parsed.type && CALL_TYPES.includes(parsed.type)) {
+                     isCallSignal = true;
+                   }
+                 } catch (e) {}
+
+                 if (isCallSignal) {
+                   return null;
+                 }
 
                  // Check if this message is a Call Log event
                  let callLogObj = null;
