@@ -846,13 +846,85 @@ function App() {
         async (payload) => {
           const newMsg = payload.new;
           const me = userProfileRef.current;
-          if (!me) return;
+          if (!me || !newMsg?.room_id) return;
 
           // Skip sender's own realtime echo (sender UI uses optimistic updates)
           if (newMsg.sender_id === me.id) return;
 
           // Deduplicate
           if (seenMessageIds.current.has(newMsg.id)) return;
+
+          const targetRoomId = newMsg.room_id;
+
+          // 🔒 SECURITY CHECK: Ensure current user is actually a participant of targetRoomId
+          let isParticipant = !!chatsRef.current[targetRoomId];
+
+          if (!isParticipant) {
+            try {
+              const { data: partData, error: partErr } = await supabase
+                .from('room_participants')
+                .select('room_id')
+                .eq('room_id', targetRoomId)
+                .eq('user_id', me.id)
+                .maybeSingle();
+
+              if (!partErr && partData?.room_id) {
+                isParticipant = true;
+                // User IS a valid participant — fetch room details to add to chats state
+                const { data: roomDetails } = await supabase
+                  .from('rooms')
+                  .select(`
+                    id,
+                    name,
+                    type,
+                    created_at,
+                    participants:room_participants(
+                      user:profiles(id, username, public_key)
+                    )
+                  `)
+                  .eq('id', targetRoomId)
+                  .maybeSingle();
+
+                if (roomDetails) {
+                  const parsedParticipants = [];
+                  if (Array.isArray(roomDetails.participants)) {
+                    roomDetails.participants.forEach(p => {
+                      const u = p.user || p.profiles || p;
+                      if (u && (u.id || u.username)) {
+                        parsedParticipants.push({
+                          id: u.id || 'unknown',
+                          name: u.username || u.name || 'User',
+                          avatar: `https://i.pravatar.cc/150?u=${u.id || 'default'}`,
+                          online: true,
+                        });
+                      }
+                    });
+                  }
+                  setChats(prev => ({
+                    ...prev,
+                    [targetRoomId]: {
+                      id: roomDetails.id,
+                      name: roomDetails.name || 'Direct Channel',
+                      type: roomDetails.type,
+                      subtitle: roomDetails.type === 'room' ? 'Encrypted Group' : 'Direct Message',
+                      iconBg: roomDetails.type === 'room' ? 'bg-blue-600' : 'bg-pink-600',
+                      participants: parsedParticipants,
+                      messages: []
+                    }
+                  }));
+                }
+              }
+            } catch (err) {
+              console.warn("Participant authorization check failed:", err);
+            }
+          }
+
+          // ⛔ SECURITY GUARD: If current user is NOT a participant, DISCARD EVENT IMMEDIATELY!
+          if (!isParticipant) {
+            return;
+          }
+
+          // Mark message as seen now that participation is confirmed
           seenMessageIds.current.add(newMsg.id);
 
           // Decode base64 payload for checking call signals
@@ -900,9 +972,6 @@ function App() {
           }
 
           // Real-Time Chat Message Handler
-          const targetRoomId = newMsg.room_id;
-
-          // Format received message: Receiver sees raw ciphertext payload with "Tap to Decrypt" button
           const formattedMsg = {
             id: newMsg.id,
             sender: newMsg.sender?.username || 'User',
@@ -913,13 +982,8 @@ function App() {
           };
 
           setChats(prev => {
-            const existingRoom = prev[targetRoomId] || {
-              id: targetRoomId,
-              name: 'Direct Message',
-              type: 'direct',
-              participants: [],
-              messages: []
-            };
+            const existingRoom = prev[targetRoomId];
+            if (!existingRoom) return prev;
             const existingMsgs = existingRoom.messages || [];
             if (existingMsgs.some(m => m.id === newMsg.id)) return prev;
 
