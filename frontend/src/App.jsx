@@ -339,6 +339,23 @@ function App() {
     }
   };
 
+  const logCallToTimeline = async (roomId, callType, status, durationStr) => {
+    if (!roomId) return;
+    const callLogData = {
+      isCallLog: true,
+      callType: callType || 'voice',
+      status: status || 'completed',
+      duration: durationStr || '00:00',
+    };
+    let payload = '';
+    try {
+      payload = btoa(unescape(encodeURIComponent(JSON.stringify(callLogData))));
+    } catch {
+      payload = btoa(JSON.stringify(callLogData));
+    }
+    await sendEncryptedMessage(roomId, payload).catch(() => {});
+  };
+
   // ── Start Call ─────────────────────────────────────────────────
   const startCall = async (type) => {
     if (!activeChatId) {
@@ -393,6 +410,7 @@ function App() {
 
     if (activeCallLogRef.current) {
       let durationStr = 'Missed';
+      let status = 'completed';
       if (callStartTimeRef.current) {
         const durSec = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
         const mins = Math.floor(durSec / 60);
@@ -400,6 +418,9 @@ function App() {
         durationStr = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
       } else if (activeCallLogRef.current.direction === 'outgoing') {
         durationStr = 'Unanswered';
+        status = 'unanswered';
+      } else {
+        status = 'missed';
       }
       addCallLog({
         peerName: activeCallLogRef.current.peerName,
@@ -408,6 +429,15 @@ function App() {
         direction: activeCallLogRef.current.direction,
         duration: durationStr,
       });
+
+      // Log call event card into chat timeline for both participants
+      logCallToTimeline(
+        activeCallLogRef.current.chatId,
+        activeCallLogRef.current.callType,
+        status,
+        durationStr
+      );
+
       activeCallLogRef.current = null;
       callStartTimeRef.current = null;
     }
@@ -477,6 +507,14 @@ function App() {
         direction: 'missed',
         duration: 'Declined',
       });
+
+      logCallToTimeline(
+        activeCallLogRef.current.chatId,
+        activeCallLogRef.current.callType,
+        'declined',
+        'Declined'
+      );
+
       activeCallLogRef.current = null;
       callStartTimeRef.current = null;
     }
@@ -531,20 +569,44 @@ function App() {
       return;
     }
     try {
-      let text = msg.encrypted || msg.text;
-      // Try to base64-decode first (our standard encoding)
+      let rawText = msg.encrypted || msg.text;
+      let text = rawText;
+
+      // Try base64-decode first
       try {
-        text = decodeURIComponent(escape(atob(msg.encrypted || msg.text)));
+        text = decodeURIComponent(escape(atob(rawText)));
       } catch (e) {
-        // If base64 decode fails, try RSA private-key decryption as fallback
-        if (keys?.privateKey && msg.encrypted) {
+        if (keys?.privateKey && rawText) {
           try {
-            text = await decryptMessage(keys.privateKey, msg.encrypted);
+            text = await decryptMessage(keys.privateKey, rawText);
           } catch (e2) {
-            text = msg.text;
+            text = rawText;
           }
         }
       }
+
+      // If text is a JSON string, extract the plain text contents instead of showing raw JSON
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.text) {
+            text = parsed.text;
+          } else if (parsed.message) {
+            text = parsed.message;
+          } else if (parsed.content) {
+            text = parsed.content;
+          } else if (parsed.type) {
+            if (parsed.type.startsWith('call-')) {
+              text = `📞 Call signal (${parsed.type.replace('call-', '')})`;
+            } else {
+              text = parsed.type;
+            }
+          }
+        }
+      } catch (jsonErr) {
+        // Plain text message, nothing to extract
+      }
+
       setDecryptedPreview({ msgId: msg.id, text });
     } catch (e) {
       setDecryptedPreview({ msgId: msg.id, text: msg.text });
@@ -1773,6 +1835,62 @@ function App() {
 
                {activeChat.messages && activeChat.messages.map((msg, idx) => {
                  const isSent = msg.type === 'sent';
+
+                 // Check if this message is a Call Log event
+                 let callLogObj = null;
+                 try {
+                   const raw = msg.encrypted || msg.text;
+                   const decoded = decodeURIComponent(escape(atob(raw)));
+                   const parsed = JSON.parse(decoded);
+                   if (parsed && parsed.isCallLog) {
+                     callLogObj = parsed;
+                   }
+                 } catch (e) {}
+
+                 if (callLogObj) {
+                   const isMissed = callLogObj.status === 'missed' || callLogObj.status === 'declined' || callLogObj.status === 'unanswered';
+                   return (
+                     <div key={msg.id || idx} className="flex justify-center my-3">
+                       <div className="px-4 py-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-slate-300 text-xs flex items-center gap-3 shadow-md backdrop-blur-md">
+                         <div className={`p-2 rounded-xl flex items-center justify-center ${
+                           isMissed 
+                             ? 'bg-rose-950/80 text-rose-400 border border-rose-800/80' 
+                             : 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/80'
+                         }`}>
+                           {isMissed ? (
+                             <PhoneOff className="w-4 h-4" />
+                           ) : callLogObj.callType === 'video' ? (
+                             <Video className="w-4 h-4" />
+                           ) : (
+                             <Phone className="w-4 h-4" />
+                           )}
+                         </div>
+
+                         <div className="flex flex-col">
+                           <div className="font-bold text-white text-xs flex items-center gap-1.5">
+                             <span>
+                               {isMissed 
+                                 ? (callLogObj.status === 'declined' ? 'Declined Call' : 'Missed Call')
+                                 : `${callLogObj.callType === 'video' ? 'Video' : 'Voice'} Call`}
+                             </span>
+                             {callLogObj.duration && callLogObj.duration !== 'Missed' && callLogObj.duration !== 'Declined' && callLogObj.duration !== 'Unanswered' && (
+                               <span className="font-mono text-[10px] text-slate-400">({callLogObj.duration})</span>
+                             )}
+                           </div>
+                           <span className="text-[10px] text-slate-500">{msg.time}</span>
+                         </div>
+
+                         <button
+                           onClick={() => startCall(callLogObj.callType || 'voice')}
+                           className="ml-2 px-3 py-1.5 rounded-xl bg-gradient-to-r from-pink-500/20 to-blue-500/20 hover:from-pink-500/30 hover:to-blue-500/30 border border-pink-500/30 text-pink-400 text-[11px] font-bold transition-all active:scale-95 flex items-center gap-1"
+                         >
+                           <Phone className="w-3 h-3" /> Call Back
+                         </button>
+                       </div>
+                     </div>
+                   );
+                 }
+
                  // Sender: always plain text. Receiver: show encrypted blob unless decrypted
                  const isDecrypted = decryptedPreview?.msgId === msg.id;
                  const displayText = isSent
