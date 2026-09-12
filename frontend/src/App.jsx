@@ -771,109 +771,137 @@ function App() {
   useEffect(() => { chatsRef.current = chats; }, [chats]);
   useEffect(() => { keysRef.current = keys; }, [keys]);
 
-  // ── Global call-signal subscription ───────────────────────────────────────
-  // Listens on ALL user rooms so the recipient receives incoming calls
-  // regardless of which chat (or no chat) they currently have open.
+  // ── Global Real-Time Subscription for Messages & WebRTC Calls ──────────────
+  // Subscribes globally to all messages table events so the recipient receives messages & calls in real time
   useEffect(() => {
     if (!isLoggedIn || !userProfile?.id) return;
-    const allRoomIds = Object.keys(chats);
-    if (allRoomIds.length === 0) return;
 
-    const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+    const channel = supabase
+      .channel('global-chat-and-calls-channel')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        async (payload) => {
+          const newMsg = payload.new;
+          const me = userProfileRef.current;
+          if (!me) return;
 
-    const callChannels = allRoomIds.map(roomId =>
-      supabase
-        .channel(`call-signals:${roomId}`)
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` },
-          async (payload) => {
-            const newMsg = payload.new;
-            const me = userProfileRef.current;
-            if (!me || newMsg.sender_id === me.id) return;
+          // Skip sender's own realtime echo (sender UI uses optimistic updates)
+          if (newMsg.sender_id === me.id) return;
 
-            // Only process call-type signals here
-            let plaintext;
-            try { plaintext = decodeURIComponent(escape(atob(newMsg.encrypted_content))); }
-            catch { plaintext = newMsg.encrypted_content; }
+          // Deduplicate
+          if (seenMessageIds.current.has(newMsg.id)) return;
+          seenMessageIds.current.add(newMsg.id);
 
-            let parsed;
-            try { parsed = JSON.parse(plaintext); } catch { return; }
-            if (!CALL_TYPES.includes(parsed.type)) return;
+          // Decode base64 payload for checking call signals
+          let plaintext;
+          try { plaintext = decodeURIComponent(escape(atob(newMsg.encrypted_content))); }
+          catch { plaintext = newMsg.encrypted_content; }
 
-            if (parsed.type === 'call-start') {
-              playRingtone('incoming');
-              activeCallLogRef.current = {
-                peerName: parsed.from ? (parsed.from.startsWith('@') ? parsed.from : `@${parsed.from}`) : 'User',
-                chatId: roomId,
-                callType: parsed.callType || 'voice',
-                direction: 'missed',
-              };
-              callStartTimeRef.current = null;
-              setIncomingCall({ roomId, from: parsed.from, callType: parsed.callType, offer: parsed.offer });
-              // Auto-switch to the room where the call is coming from
-              setActiveChatId(roomId);
-              setIsChatRoomActive(true);
-            } else if (parsed.type === 'call-answer') {
-              stopRingtone();
-              setCallStatus('connected');
-              if (peerConnectionRef.current && parsed.answer) {
-                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(parsed.answer));
+          const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+          try {
+            const parsed = JSON.parse(plaintext);
+            if (parsed && parsed.type && CALL_TYPES.includes(parsed.type)) {
+              if (parsed.type === 'call-start') {
+                playRingtone('incoming');
+                activeCallLogRef.current = {
+                  peerName: parsed.from ? (parsed.from.startsWith('@') ? parsed.from : `@${parsed.from}`) : 'User',
+                  chatId: newMsg.room_id,
+                  callType: parsed.callType || 'voice',
+                  direction: 'missed',
+                };
+                callStartTimeRef.current = null;
+                setIncomingCall({ roomId: newMsg.room_id, from: parsed.from, callType: parsed.callType, offer: parsed.offer });
+                setActiveChatId(newMsg.room_id);
+                setIsChatRoomActive(true);
+              } else if (parsed.type === 'call-answer') {
+                stopRingtone();
+                setCallStatus('connected');
+                if (peerConnectionRef.current && parsed.answer) {
+                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(parsed.answer)).catch(console.error);
+                }
+              } else if (parsed.type === 'call-decline') {
+                stopRingtone();
+                alert(`${parsed.from} declined the call`);
+                endCall(false);
+              } else if (parsed.type === 'call-end') {
+                endCall(false);
+              } else if (parsed.type === 'ice-candidate') {
+                if (peerConnectionRef.current && parsed.candidate) {
+                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(parsed.candidate)).catch(() => {});
+                }
               }
-            } else if (parsed.type === 'call-decline') {
-              stopRingtone();
-              alert(`${parsed.from} declined the call`);
-              endCall(false);
-            } else if (parsed.type === 'call-end') {
-              endCall(false);
-            } else if (parsed.type === 'ice-candidate') {
-              if (peerConnectionRef.current && parsed.candidate) {
-                await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(parsed.candidate)).catch(() => {});
-              }
+              return;
             }
+          } catch (e) {
+            // Not a JSON call signal — regular chat message!
           }
-        )
-        .subscribe()
-    );
+
+          // Real-Time Chat Message Handler
+          const targetRoomId = newMsg.room_id;
+
+          // Format received message: Receiver sees raw ciphertext payload with "Tap to Decrypt" button
+          const formattedMsg = {
+            id: newMsg.id,
+            sender: newMsg.sender?.username || 'User',
+            text: newMsg.encrypted_content, // Receiver sees ciphertext
+            encrypted: newMsg.encrypted_content,
+            time: new Date(newMsg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            type: 'received',
+          };
+
+          setChats(prev => {
+            const existingRoom = prev[targetRoomId] || {
+              id: targetRoomId,
+              name: 'Direct Message',
+              type: 'direct',
+              participants: [],
+              messages: []
+            };
+            const existingMsgs = existingRoom.messages || [];
+            if (existingMsgs.some(m => m.id === newMsg.id)) return prev;
+
+            return {
+              ...prev,
+              [targetRoomId]: {
+                ...existingRoom,
+                messages: [...existingMsgs, formattedMsg]
+              }
+            };
+          });
+        }
+      )
+      .subscribe();
 
     return () => {
-      callChannels.forEach(ch => { try { ch.unsubscribe(); } catch (e) {} });
+      supabase.removeChannel(channel);
     };
-  // Re-run when the set of rooms changes
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoggedIn, userProfile?.id, Object.keys(chats).sort().join(',')]);
+  }, [isLoggedIn, userProfile?.id]);
 
-  // Subscribe to real-time messages for active room
+  // Load message history when selecting active chat
   useEffect(() => {
     if (!isLoggedIn || !activeChatId) return;
 
-    // Reset seen IDs when switching rooms
     seenMessageIds.current = new Set();
-
-    let subscription;
-    async function setupRealtimeMessages() {
+    async function loadActiveMessages() {
       try {
         const history = await fetchRoomMessages(activeChatId);
         if (history) {
           const loadedMsgs = history.map(m => {
             seenMessageIds.current.add(m.id);
             const isMine = m.sender_id === userProfileRef.current?.id;
-            // Sender sees plain text; receiver sees the raw encrypted ciphertext
             let displayText;
             if (isMine) {
-              // Decode the base64 back to plain text for sender
-              try {
-                displayText = decodeURIComponent(escape(atob(m.encrypted_content)));
-              } catch {
-                displayText = m.encrypted_content;
-              }
+              // Sender sees plain text (decoded from base64)
+              try { displayText = decodeURIComponent(escape(atob(m.encrypted_content))); }
+              catch { displayText = m.encrypted_content; }
             } else {
-              // Receiver sees encrypted ciphertext — must decrypt to read
+              // Receiver sees encrypted ciphertext payload (they must click Decrypt to view)
               displayText = m.encrypted_content;
             }
             return {
               id: m.id,
-              sender: m.sender?.username || 'Member',
+              sender: m.sender?.username || 'User',
               text: displayText,
               encrypted: m.encrypted_content,
               time: new Date(m.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -889,85 +917,13 @@ function App() {
             }
           }));
         }
-
-        subscription = subscribeToMessages(activeChatId, async (newMsg) => {
-          const roomId = activeChatIdRef.current;
-          const me = userProfileRef.current;
-
-          // Deduplicate — skip messages we already have (e.g. sender's own optimistic msg)
-          if (seenMessageIds.current.has(newMsg.id)) return;
-          seenMessageIds.current.add(newMsg.id);
-
-          // Decode plain text for call-signal parsing
-          let plaintext;
-          try {
-            plaintext = decodeURIComponent(escape(atob(newMsg.encrypted_content)));
-          } catch {
-            plaintext = newMsg.encrypted_content;
-          }
-
-          // Skip call signals — handled by the global call subscription
-          try {
-            const parsed = JSON.parse(plaintext);
-            const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
-            if (CALL_TYPES.includes(parsed.type)) return;
-          } catch (e) {
-            // Not JSON — regular chat message, continue processing
-          }
-
-          const isMine = newMsg.sender_id === me?.id;
-
-          // Determine display text:
-          // Sender → plain text (decoded from base64)
-          // Receiver → raw encrypted payload (they must click Decrypt)
-          let displayText;
-          if (isMine) {
-            try { displayText = decodeURIComponent(escape(atob(newMsg.encrypted_content))); }
-            catch { displayText = newMsg.encrypted_content; }
-          } else {
-            displayText = newMsg.encrypted_content;
-          }
-
-          // Lookup sender name from latest chats ref
-          const currentChat = chatsRef.current[roomId];
-          const senderParticipant = currentChat?.participants?.find(p => p.id === newMsg.sender_id);
-          const senderName = senderParticipant?.name || (isMine ? me?.username : 'Member');
-
-          const formattedMsg = {
-            id: newMsg.id,
-            sender: senderName,
-            text: displayText,
-            encrypted: newMsg.encrypted_content,
-            time: new Date(newMsg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            type: isMine ? 'sent' : 'received',
-          };
-
-          setChats(prev => {
-            const existing = prev[roomId]?.messages || [];
-            // Extra guard: skip if already present
-            if (existing.some(m => m.id === newMsg.id)) return prev;
-            return {
-              ...prev,
-              [roomId]: {
-                ...prev[roomId],
-                messages: [...existing, formattedMsg]
-              }
-            };
-          });
-        });
       } catch (err) {
-        console.error("Realtime subscription error:", err);
+        console.error("Failed to fetch room messages:", err);
       }
     }
 
-    setupRealtimeMessages();
-
-    return () => {
-      if (subscription && typeof subscription.unsubscribe === 'function') {
-        subscription.unsubscribe();
-      }
-    };
-  }, [activeChatId, isLoggedIn]);
+    loadActiveMessages();
+  }, [isLoggedIn, activeChatId]);
 
   const handleSelectUserToChat = async (targetUser) => {
     try {
