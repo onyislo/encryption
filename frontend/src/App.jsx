@@ -3,7 +3,8 @@ import {
   Shield, Lock, User, Eye, EyeOff, Search, Plus, MessageSquare, 
   ChevronLeft, Phone, Video, MoreVertical, Paperclip, Smile, 
   Send, Info, Check, Copy, Settings, Menu, LogOut, RefreshCw, X, AlertTriangle, Key, UserPlus,
-  Bell, Moon, Sun, Database, Trash2, ChevronRight, Fingerprint, Globe, HardDrive
+  Bell, Moon, Sun, Database, Trash2, ChevronRight, Fingerprint, Globe, HardDrive,
+  PhoneIncoming, PhoneOutgoing, PhoneMissed, PhoneOff, ArrowDownLeft, ArrowUpRight
 } from 'lucide-react';
 import { generateKeyPair, exportPublicKey, encryptMessage, decryptMessage } from './utils/crypto';
 import { 
@@ -84,6 +85,48 @@ function App() {
   const outboundRingRef = useRef(null);
   const remoteStreamRef = useRef(null);
   const currentCallRoomIdRef = useRef(null);
+
+  // ── Call History Logging ─────────────────────────────────────
+  const [activeNavTab, setActiveNavTab] = useState('chats'); // 'chats' | 'calls'
+  const [callLogs, setCallLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('secure_call_logs');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const activeCallLogRef = useRef(null);
+  const callStartTimeRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('secure_call_logs', JSON.stringify(callLogs));
+    } catch (err) {
+      console.warn('Could not save call logs:', err);
+    }
+  }, [callLogs]);
+
+  const addCallLog = (logEntry) => {
+    setCallLogs(prev => [
+      {
+        id: crypto.randomUUID(),
+        peerName: logEntry.peerName || 'Unknown User',
+        chatId: logEntry.chatId,
+        callType: logEntry.callType || 'voice',
+        direction: logEntry.direction || 'incoming', // 'incoming' | 'outgoing' | 'missed'
+        timestamp: new Date().toISOString(),
+        duration: logEntry.duration || '00:00',
+      },
+      ...prev.slice(0, 99) // keep latest 100 calls
+    ]);
+  };
+
+  const clearCallLogs = () => {
+    setCallLogs([]);
+    try { localStorage.removeItem('secure_call_logs'); } catch(e) {}
+  };
 
   const getChatDisplayName = (chat) => {
     if (!chat) return '';
@@ -265,6 +308,7 @@ function App() {
       if (pc.connectionState === 'connected') {
         setCallStatus('connected');
         stopRingtone();
+        callStartTimeRef.current = Date.now();
       }
     };
     return pc;
@@ -282,6 +326,19 @@ function App() {
     }
   }, [isInCall, callType, callStatus]);
 
+  const startCallFromLog = (log, type) => {
+    if (log.chatId && chats[log.chatId]) {
+      setActiveChatId(log.chatId);
+      setIsChatRoomActive(true);
+      setActiveNavTab('chats');
+      setTimeout(() => {
+        startCall(type);
+      }, 150);
+    } else {
+      alert(`Cannot start call: chat with ${log.peerName} is no longer active.`);
+    }
+  };
+
   // ── Start Call ─────────────────────────────────────────────────
   const startCall = async (type) => {
     if (!activeChatId) {
@@ -290,6 +347,14 @@ function App() {
     }
     try {
       currentCallRoomIdRef.current = activeChatId;
+      activeCallLogRef.current = {
+        peerName: chats[activeChatId] ? getChatDisplayName(chats[activeChatId]) : 'User',
+        chatId: activeChatId,
+        callType: type,
+        direction: 'outgoing',
+      };
+      callStartTimeRef.current = null;
+
       setCallType(type);
       setCallStatus('calling');
       setIsInCall(true);
@@ -325,6 +390,28 @@ function App() {
         type: 'call-end', from: userProfile?.username
       })).catch(() => {});
     }
+
+    if (activeCallLogRef.current) {
+      let durationStr = 'Missed';
+      if (callStartTimeRef.current) {
+        const durSec = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
+        const mins = Math.floor(durSec / 60);
+        const secs = durSec % 60;
+        durationStr = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      } else if (activeCallLogRef.current.direction === 'outgoing') {
+        durationStr = 'Unanswered';
+      }
+      addCallLog({
+        peerName: activeCallLogRef.current.peerName,
+        chatId: activeCallLogRef.current.chatId,
+        callType: activeCallLogRef.current.callType,
+        direction: activeCallLogRef.current.direction,
+        duration: durationStr,
+      });
+      activeCallLogRef.current = null;
+      callStartTimeRef.current = null;
+    }
+
     setIsInCall(false);
     setCallType(null);
     setIncomingCall(null);
@@ -344,6 +431,10 @@ function App() {
     const targetRoom = incomingCall.roomId || activeChatId;
     currentCallRoomIdRef.current = targetRoom;
     const requestedType = incomingCall.callType || 'voice';
+
+    if (activeCallLogRef.current) {
+      activeCallLogRef.current.direction = 'incoming';
+    }
 
     try {
       const stream = await getMediaStream(requestedType);
@@ -377,6 +468,17 @@ function App() {
       await sendEncryptedMessage(targetRoom, JSON.stringify({
         type: 'call-decline', from: userProfile?.username
       })).catch(() => {});
+    }
+    if (activeCallLogRef.current) {
+      addCallLog({
+        peerName: activeCallLogRef.current.peerName,
+        chatId: activeCallLogRef.current.chatId,
+        callType: activeCallLogRef.current.callType,
+        direction: 'missed',
+        duration: 'Declined',
+      });
+      activeCallLogRef.current = null;
+      callStartTimeRef.current = null;
     }
     setIncomingCall(null);
   };
@@ -701,7 +803,14 @@ function App() {
 
             if (parsed.type === 'call-start') {
               playRingtone('incoming');
-              setIncomingCall({ from: parsed.from, callType: parsed.callType, offer: parsed.offer });
+              activeCallLogRef.current = {
+                peerName: parsed.from ? (parsed.from.startsWith('@') ? parsed.from : `@${parsed.from}`) : 'User',
+                chatId: roomId,
+                callType: parsed.callType || 'voice',
+                direction: 'missed',
+              };
+              callStartTimeRef.current = null;
+              setIncomingCall({ roomId, from: parsed.from, callType: parsed.callType, offer: parsed.offer });
               // Auto-switch to the room where the call is coming from
               setActiveChatId(roomId);
               setIsChatRoomActive(true);
@@ -1085,7 +1194,117 @@ function App() {
     );
   }
 
-  const activeChat = chats[activeChatId];
+  const renderCallHistoryView = () => (
+    <div className="flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-16 lg:pb-0 h-full">
+      {/* Call History Header */}
+      <div className="p-4 border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-500 text-white flex items-center justify-center font-bold text-sm shadow-lg shadow-emerald-500/20">
+            <Phone className="w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="text-base font-black text-white leading-tight">Call History</h1>
+            <p className="text-[10px] text-slate-400 font-semibold">
+              {callLogs.length} call{callLogs.length !== 1 ? 's' : ''} logged
+            </p>
+          </div>
+        </div>
+        {callLogs.length > 0 && (
+          <button
+            onClick={() => {
+              if (window.confirm('Clear all call history logs?')) clearCallLogs();
+            }}
+            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950/50 text-slate-400 hover:text-rose-400 text-xs font-bold transition-all border border-slate-700/60 flex items-center gap-1.5"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Clear</span>
+          </button>
+        )}
+      </div>
+
+      {/* Call Logs List */}
+      <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
+        {callLogs.length === 0 ? (
+          <div className="py-16 px-4 text-center border border-slate-800/80 rounded-3xl bg-slate-900/40 my-auto">
+            <div className="w-14 h-14 rounded-3xl bg-slate-800/80 border border-slate-700 text-slate-500 flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <PhoneOff className="w-7 h-7 text-slate-500" />
+            </div>
+            <h3 className="text-sm font-bold text-slate-200">No Call History</h3>
+            <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
+              Your voice and video calls (incoming, outgoing, and missed) will appear here just like WhatsApp.
+            </p>
+          </div>
+        ) : (
+          callLogs.map(log => {
+            const isMissed = log.direction === 'missed';
+            const isOutgoing = log.direction === 'outgoing';
+            const isIncoming = log.direction === 'incoming';
+
+            return (
+              <div
+                key={log.id}
+                className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800 hover:bg-slate-800/80 transition-all flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-pink-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-md">
+                    {log.peerName.replace('@', '').substring(0, 2).toUpperCase() || 'U'}
+                  </div>
+
+                  <div className="overflow-hidden">
+                    <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                      <span className="truncate">{log.peerName}</span>
+                      {log.callType === 'video' ? (
+                        <Video className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                      ) : (
+                        <Phone className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1 text-[11px] mt-0.5">
+                      {isMissed && <PhoneOff className="w-3 h-3 text-rose-500 flex-shrink-0" />}
+                      {isOutgoing && <ArrowUpRight className="w-3 h-3 text-emerald-400 flex-shrink-0" />}
+                      {isIncoming && <ArrowDownLeft className="w-3 h-3 text-blue-400 flex-shrink-0" />}
+
+                      <span className={`font-medium ${isMissed ? 'text-rose-400 font-bold' : 'text-slate-400'}`}>
+                        {isMissed ? 'Missed' : isOutgoing ? 'Outgoing' : 'Incoming'}
+                      </span>
+                      <span className="text-slate-600">•</span>
+                      <span className="text-slate-400 text-[10px]">
+                        {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      {log.duration && log.duration !== 'Missed' && log.duration !== 'Unanswered' && log.duration !== 'Declined' && (
+                        <>
+                          <span className="text-slate-600">•</span>
+                          <span className="text-slate-400 text-[10px] font-mono">{log.duration}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-shrink-0 ml-1">
+                  <button
+                    onClick={() => startCallFromLog(log, 'voice')}
+                    className="p-2 rounded-xl bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 hover:bg-emerald-600 hover:text-white transition-all active:scale-95 shadow-sm"
+                    title="Voice Call Back"
+                  >
+                    <Phone className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => startCallFromLog(log, 'video')}
+                    className="p-2 rounded-xl bg-blue-950/80 border border-blue-800/80 text-blue-400 hover:bg-blue-600 hover:text-white transition-all active:scale-95 shadow-sm"
+                    title="Video Call Back"
+                  >
+                    <Video className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex h-screen max-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors fixed inset-0 w-full">
@@ -1192,67 +1411,103 @@ function App() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto mt-1 px-3 space-y-4">
-          {/* Chat Rooms */}
-          <div>
-            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 mb-2 tracking-wider">
-              <span>CHAT ROOMS ({Object.values(chats).filter(c => c.type === 'room').length})</span>
-              <button onClick={() => setIsNewRoomModalOpen(true)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors" title="Create Room">
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <div className="space-y-1">
-              {Object.values(chats)
-                .filter(chat => chat.type === 'room')
-                .map(chat => (
-                  <SidebarItem 
-                    key={chat.id}
-                    icon={<Lock className="w-4 h-4 text-white" />} 
-                    iconBg={chat.iconBg || "bg-blue-600"} 
-                    title={chat.name} 
-                    subtitle={chat.subtitle}
-                    active={activeChatId === chat.id} 
-                    onClick={() => { setActiveChatId(chat.id); setIsMobileMenuOpen(false); }} 
-                  />
-                ))}
-            </div>
-          </div>
+        {/* Desktop Sidebar Navigation Tab Bar */}
+        <div className="px-3 pb-2 flex items-center gap-1.5 border-b border-slate-200 dark:border-slate-800">
+          <button
+            onClick={() => setActiveNavTab('chats')}
+            className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              activeNavTab === 'chats'
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-500 dark:text-pink-400 border border-pink-500/30'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Chats</span>
+          </button>
 
-          {/* Direct Messages */}
-          <div>
-            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 mb-2 tracking-wider">
-              <span>DIRECT MESSAGES ({Object.values(chats).filter(c => c.type === 'direct').length})</span>
-            </div>
-            <div className="space-y-1">
-              {Object.values(chats)
-                .filter(chat => chat.type === 'direct')
-                .map(chat => {
-                  const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
-                  const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
-                  const displayName = getChatDisplayName(chat);
-                  const lastSeenTime = otherParticipant ? userLastSeen[otherParticipant.id] : null;
-                  const statusText = isUserOnline ? '🟢 Online' : formatLastSeen(lastSeenTime);
-                  
-                  return (
+          <button
+            onClick={() => setActiveNavTab('calls')}
+            className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 relative ${
+              activeNavTab === 'calls'
+                ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-500 dark:text-pink-400 border border-pink-500/30'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60'
+            }`}
+          >
+            <Phone className="w-3.5 h-3.5" />
+            <span>Calls</span>
+            {callLogs.some(l => l.direction === 'missed') && (
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+            )}
+          </button>
+        </div>
+
+        {activeNavTab === 'calls' ? (
+          <div className="flex-1 overflow-y-auto">
+            {renderCallHistoryView()}
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto mt-1 px-3 space-y-4">
+            {/* Chat Rooms */}
+            <div>
+              <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 mb-2 tracking-wider">
+                <span>CHAT ROOMS ({Object.values(chats).filter(c => c.type === 'room').length})</span>
+                <button onClick={() => setIsNewRoomModalOpen(true)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors" title="Create Room">
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="space-y-1">
+                {Object.values(chats)
+                  .filter(chat => chat.type === 'room')
+                  .map(chat => (
                     <SidebarItem 
                       key={chat.id}
-                      icon={<User className="w-4 h-4 text-white" />} 
-                      iconBg={chat.iconBg || "bg-pink-600"} 
-                      title={displayName} 
-                      subtitle={statusText}
+                      icon={<Lock className="w-4 h-4 text-white" />} 
+                      iconBg={chat.iconBg || "bg-blue-600"} 
+                      title={chat.name} 
+                      subtitle={chat.subtitle}
                       active={activeChatId === chat.id} 
-                      isOnline={isUserOnline}
-                      onClick={() => {
-                        setActiveChatId(chat.id);
-                        setIsChatRoomActive(true);
-                        setIsMobileMenuOpen(false);
-                      }} 
+                      onClick={() => { setActiveChatId(chat.id); setIsMobileMenuOpen(false); }} 
                     />
-                  );
-                })}
+                  ))}
+              </div>
+            </div>
+
+            {/* Direct Messages */}
+            <div>
+              <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 px-2 mb-2 tracking-wider">
+                <span>DIRECT MESSAGES ({Object.values(chats).filter(c => c.type === 'direct').length})</span>
+              </div>
+              <div className="space-y-1">
+                {Object.values(chats)
+                  .filter(chat => chat.type === 'direct')
+                  .map(chat => {
+                    const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
+                    const isUserOnline = otherParticipant ? onlineUserIds.includes(otherParticipant.id) : false;
+                    const displayName = getChatDisplayName(chat);
+                    const lastSeenTime = otherParticipant ? userLastSeen[otherParticipant.id] : null;
+                    const statusText = isUserOnline ? '🟢 Online' : formatLastSeen(lastSeenTime);
+                    
+                    return (
+                      <SidebarItem 
+                        key={chat.id}
+                        icon={<User className="w-4 h-4 text-white" />} 
+                        iconBg={chat.iconBg || "bg-pink-600"} 
+                        title={displayName} 
+                        subtitle={statusText}
+                        active={activeChatId === chat.id} 
+                        isOnline={isUserOnline}
+                        onClick={() => {
+                          setActiveChatId(chat.id);
+                          setIsChatRoomActive(true);
+                          setIsMobileMenuOpen(false);
+                        }} 
+                      />
+                    );
+                  })}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* User Footer */}
         <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between">
@@ -1305,8 +1560,15 @@ function App() {
           </div>
         </div>
 
-        {/* Mobile Dedicated Chats Page (shown when user is on mobile & not inside an active chat conversation) */}
-        {!isChatRoomActive && (
+        {/* Mobile Dedicated Calls Page */}
+        {!isChatRoomActive && activeNavTab === 'calls' && (
+          <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden">
+            {renderCallHistoryView()}
+          </div>
+        )}
+
+        {/* Mobile Dedicated Chats Page */}
+        {!isChatRoomActive && activeNavTab === 'chats' && (
           <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-16">
             {/* Header / Current User Bar */}
             <div className="p-4 border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
@@ -1783,12 +2045,13 @@ function App() {
         <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-slate-900/98 backdrop-blur-2xl border-t border-slate-800/90 shadow-2xl shadow-pink-500/5 z-[100] px-3 py-2 flex items-center justify-around text-slate-400 transition-all safe-area-inset-bottom">
           <button 
             onClick={() => {
+              setActiveNavTab('chats');
               setIsSearchOpen(false);
               setIsSettingsOpen(false);
               setIsChatRoomActive(false);
             }} 
             className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
-              !isSearchOpen && !isSettingsOpen && !isChatRoomActive 
+              activeNavTab === 'chats' && !isSearchOpen && !isSettingsOpen && !isChatRoomActive 
                 ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10' 
                 : 'hover:text-white hover:bg-slate-800/50'
             }`}
@@ -1799,17 +2062,22 @@ function App() {
 
           <button 
             onClick={() => {
+              setActiveNavTab('calls');
+              setIsSearchOpen(false);
               setIsSettingsOpen(false);
-              setIsSearchOpen(true);
+              setIsChatRoomActive(false);
             }} 
-            className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 ${
-              isSearchOpen 
+            className={`px-3 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-all active:scale-95 relative ${
+              activeNavTab === 'calls' && !isSearchOpen && !isSettingsOpen && !isChatRoomActive 
                 ? 'bg-gradient-to-r from-pink-500/20 to-blue-500/20 text-pink-400 font-bold border border-pink-500/30 shadow-md shadow-pink-500/10' 
                 : 'hover:text-white hover:bg-slate-800/50'
             }`}
           >
-            <Search className="w-5 h-5" />
-            <span>Search</span>
+            <Phone className="w-5 h-5" />
+            <span>Calls</span>
+            {callLogs.some(l => l.direction === 'missed') && (
+              <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+            )}
           </button>
 
           <button 
