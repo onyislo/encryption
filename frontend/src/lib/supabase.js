@@ -147,12 +147,13 @@ export async function fetchUserRooms() {
   return rooms;
 }
 
-export async function createRoom(roomName, participantIds = []) {
+export async function createRoom(roomName, participantIds = [], explicitType = null) {
   const user = await getCurrentUser();
   const currentUserId = user?.id;
 
   const newRoomId = crypto.randomUUID();
-  const roomType = roomName ? 'room' : 'direct';
+  // explicitType overrides the name-based heuristic
+  const roomType = explicitType || (roomName ? 'room' : 'direct');
 
   const { error: roomError } = await supabase
     .from('rooms')
@@ -201,6 +202,8 @@ export async function leaveRoom(roomId) {
   const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
 
+  // Remove this user from the participants — this is always safe under RLS.
+  // We do NOT delete the room row itself to avoid permission errors.
   const { error } = await supabase
     .from('room_participants')
     .delete()
@@ -208,9 +211,6 @@ export async function leaveRoom(roomId) {
     .eq('user_id', user.id);
 
   if (error) throw error;
-  
-  // Also delete the room itself if it's a direct message
-  await supabase.from('rooms').delete().eq('id', roomId).catch(() => {});
 }
 
 export async function deleteMessage(messageId) {
@@ -285,16 +285,16 @@ export async function startDirectMessage(targetUserId, targetUsername) {
   if (!user) throw new Error('Not authenticated');
 
   const existingRooms = await fetchUserRooms();
-  
-  // Better duplicate check - check if a direct room exists with ONLY these 2 users
+
+  // Check if a direct room already exists with ONLY these 2 users
   const existingDirect = existingRooms?.find(r => {
     if (r.type !== 'direct') return false;
-    
+
     const participantIds = r.participants?.map(p => p.user?.id || p.id).filter(Boolean) || [];
     const hasTarget = participantIds.includes(targetUserId);
     const hasCurrentUser = participantIds.includes(user.id);
     const onlyTwoUsers = participantIds.length === 2;
-    
+
     return hasTarget && hasCurrentUser && onlyTwoUsers;
   });
 
@@ -302,7 +302,8 @@ export async function startDirectMessage(targetUserId, targetUsername) {
     return existingDirect;
   }
 
-  return await createRoom(targetUsername ? `@${targetUsername}` : 'Direct Message', [targetUserId]);
+  // Always create as type='direct' regardless of name
+  return await createRoom(null, [targetUserId], 'direct');
 }
 
 export function subscribeToPresence(userId, username, onPresenceChange) {

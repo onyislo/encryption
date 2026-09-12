@@ -44,6 +44,14 @@ function App() {
   const [keys, setKeys] = useState(null);
   const [publicKeyPem, setPublicKeyPem] = useState('');
   const [lastEncrypted, setLastEncrypted] = useState('');
+
+  // Refs to avoid stale closures inside realtime callbacks
+  const activeChatIdRef = useRef(null);
+  const userProfileRef = useRef(null);
+  const chatsRef = useRef({});
+  const keysRef = useRef(null);
+  // Track message IDs already added to prevent duplicates
+  const seenMessageIds = useRef(new Set());
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
@@ -323,13 +331,20 @@ function App() {
     if (!window.confirm('Delete this chat? This cannot be undone.')) return;
     try {
       await leaveRoom(chatId);
-      await loadUserRooms();
+      // Immediately remove from local state so UI updates instantly
+      setChats(prev => {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      });
       if (activeChatId === chatId) {
         setActiveChatId(null);
         setIsChatRoomActive(false);
       }
     } catch (err) {
       alert('Failed to delete chat: ' + err.message);
+      // Reload rooms to restore correct state on failure
+      await loadUserRooms();
     }
   };
 
@@ -351,20 +366,26 @@ function App() {
   };
 
   // ── Decrypt Message Preview ────────────────────────────────────
+  // For received messages: msg.text holds the base64 ciphertext.
+  // Decrypting = base64-decoding back to the original plain text.
   const handleDecryptPreview = async (msg) => {
     if (decryptedPreview?.msgId === msg.id) {
       setDecryptedPreview(null);
       return;
     }
     try {
-      let text = msg.text;
-      // Only decrypt if we have the raw encrypted content
-      if (keys?.privateKey && msg.encrypted) {
-        try {
-          text = await decryptMessage(keys.privateKey, msg.encrypted);
-        } catch (e) {
-          // If decryption fails, the message is already plaintext
-          text = msg.text;
+      let text = msg.encrypted || msg.text;
+      // Try to base64-decode first (our standard encoding)
+      try {
+        text = decodeURIComponent(escape(atob(msg.encrypted || msg.text)));
+      } catch (e) {
+        // If base64 decode fails, try RSA private-key decryption as fallback
+        if (keys?.privateKey && msg.encrypted) {
+          try {
+            text = await decryptMessage(keys.privateKey, msg.encrypted);
+          } catch (e2) {
+            text = msg.text;
+          }
         }
       }
       setDecryptedPreview({ msgId: msg.id, text });
@@ -587,33 +608,114 @@ function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, userProfile]);
 
-  // Subscribe to real-time messages for active room and auto-decrypt
+  // Keep refs in sync so realtime callbacks always see fresh values
+  useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
+  useEffect(() => { userProfileRef.current = userProfile; }, [userProfile]);
+  useEffect(() => { chatsRef.current = chats; }, [chats]);
+  useEffect(() => { keysRef.current = keys; }, [keys]);
+
+  // ── Global call-signal subscription ───────────────────────────────────────
+  // Listens on ALL user rooms so the recipient receives incoming calls
+  // regardless of which chat (or no chat) they currently have open.
+  useEffect(() => {
+    if (!isLoggedIn || !userProfile?.id) return;
+    const allRoomIds = Object.keys(chats);
+    if (allRoomIds.length === 0) return;
+
+    const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+
+    const callChannels = allRoomIds.map(roomId =>
+      supabase
+        .channel(`call-signals:${roomId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` },
+          async (payload) => {
+            const newMsg = payload.new;
+            const me = userProfileRef.current;
+            if (!me || newMsg.sender_id === me.id) return;
+
+            // Only process call-type signals here
+            let plaintext;
+            try { plaintext = decodeURIComponent(escape(atob(newMsg.encrypted_content))); }
+            catch { plaintext = newMsg.encrypted_content; }
+
+            let parsed;
+            try { parsed = JSON.parse(plaintext); } catch { return; }
+            if (!CALL_TYPES.includes(parsed.type)) return;
+
+            if (parsed.type === 'call-start') {
+              playRingtone('incoming');
+              setIncomingCall({ from: parsed.from, callType: parsed.callType, offer: parsed.offer });
+              // Auto-switch to the room where the call is coming from
+              setActiveChatId(roomId);
+              setIsChatRoomActive(true);
+            } else if (parsed.type === 'call-answer') {
+              stopRingtone();
+              setCallStatus('connected');
+              if (peerConnectionRef.current && parsed.answer) {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(parsed.answer));
+              }
+            } else if (parsed.type === 'call-decline') {
+              stopRingtone();
+              alert(`${parsed.from} declined the call`);
+              endCall(false);
+            } else if (parsed.type === 'call-end') {
+              endCall(false);
+            } else if (parsed.type === 'ice-candidate') {
+              if (peerConnectionRef.current && parsed.candidate) {
+                await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(parsed.candidate)).catch(() => {});
+              }
+            }
+          }
+        )
+        .subscribe()
+    );
+
+    return () => {
+      callChannels.forEach(ch => { try { ch.unsubscribe(); } catch (e) {} });
+    };
+  // Re-run when the set of rooms changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, userProfile?.id, Object.keys(chats).sort().join(',')]);
+
+  // Subscribe to real-time messages for active room
   useEffect(() => {
     if (!isLoggedIn || !activeChatId) return;
+
+    // Reset seen IDs when switching rooms
+    seenMessageIds.current = new Set();
 
     let subscription;
     async function setupRealtimeMessages() {
       try {
         const history = await fetchRoomMessages(activeChatId);
         if (history) {
-          const loadedMsgs = await Promise.all(history.map(async m => {
-            let plaintext = m.encrypted_content;
-            if (keys?.privateKey && m.encrypted_content) {
+          const loadedMsgs = history.map(m => {
+            seenMessageIds.current.add(m.id);
+            const isMine = m.sender_id === userProfileRef.current?.id;
+            // Sender sees plain text; receiver sees the raw encrypted ciphertext
+            let displayText;
+            if (isMine) {
+              // Decode the base64 back to plain text for sender
               try {
-                plaintext = await decryptMessage(keys.privateKey, m.encrypted_content);
-              } catch (e) {
-                plaintext = m.encrypted_content;
+                displayText = decodeURIComponent(escape(atob(m.encrypted_content)));
+              } catch {
+                displayText = m.encrypted_content;
               }
+            } else {
+              // Receiver sees encrypted ciphertext — must decrypt to read
+              displayText = m.encrypted_content;
             }
             return {
               id: m.id,
               sender: m.sender?.username || 'Member',
-              text: plaintext,
+              text: displayText,
               encrypted: m.encrypted_content,
               time: new Date(m.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              type: (m.sender_id === userProfile?.id) ? 'sent' : 'received',
+              type: isMine ? 'sent' : 'received',
             };
-          }));
+          });
 
           setChats(prev => ({
             ...prev,
@@ -625,81 +727,69 @@ function App() {
         }
 
         subscription = subscribeToMessages(activeChatId, async (newMsg) => {
-          let plaintext = newMsg.encrypted_content;
-          if (keys?.privateKey && newMsg.encrypted_content) {
-            try {
-              plaintext = await decryptMessage(keys.privateKey, newMsg.encrypted_content);
-            } catch (e) {
-              plaintext = newMsg.encrypted_content;
-            }
+          const roomId = activeChatIdRef.current;
+          const me = userProfileRef.current;
+
+          // Deduplicate — skip messages we already have (e.g. sender's own optimistic msg)
+          if (seenMessageIds.current.has(newMsg.id)) return;
+          seenMessageIds.current.add(newMsg.id);
+
+          // Decode plain text for call-signal parsing
+          let plaintext;
+          try {
+            plaintext = decodeURIComponent(escape(atob(newMsg.encrypted_content)));
+          } catch {
+            plaintext = newMsg.encrypted_content;
           }
-          
-          // Check if it's a call signal
+
+          // Skip call signals — handled by the global call subscription
           try {
             const parsed = JSON.parse(plaintext);
-            
-            if (parsed.type === 'call-start' && newMsg.sender_id !== userProfile?.id) {
-              // Incoming call - play ringtone
-              playRingtone('incoming');
-              setIncomingCall({
-                from: parsed.from,
-                callType: parsed.callType,
-                offer: parsed.offer
-              });
-              return;
-            } 
-            
-            if (parsed.type === 'call-answer' && newMsg.sender_id !== userProfile?.id) {
-              stopRingtone();
-              setCallStatus('connected');
-              if (peerConnectionRef.current && parsed.answer) {
-                await peerConnectionRef.current.setRemoteDescription(
-                  new RTCSessionDescription(parsed.answer)
-                );
-              }
-              return;
-            } 
-            
-            if (parsed.type === 'call-decline' && newMsg.sender_id !== userProfile?.id) {
-              stopRingtone();
-              alert(`${parsed.from} declined the call`);
-              endCall(false);
-              return;
-            }
-            
-            if (parsed.type === 'call-end' && newMsg.sender_id !== userProfile?.id) {
-              endCall(false);
-              return;
-            }
-            
-            if (parsed.type === 'ice-candidate' && newMsg.sender_id !== userProfile?.id) {
-              if (peerConnectionRef.current && parsed.candidate) {
-                await peerConnectionRef.current.addIceCandidate(
-                  new RTCIceCandidate(parsed.candidate)
-                ).catch(() => {});
-              }
-              return;
-            }
+            const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+            if (CALL_TYPES.includes(parsed.type)) return;
           } catch (e) {
-            // Not a call signal, process as normal message
+            // Not JSON — regular chat message, continue processing
           }
-          
+
+          const isMine = newMsg.sender_id === me?.id;
+
+          // Determine display text:
+          // Sender → plain text (decoded from base64)
+          // Receiver → raw encrypted payload (they must click Decrypt)
+          let displayText;
+          if (isMine) {
+            try { displayText = decodeURIComponent(escape(atob(newMsg.encrypted_content))); }
+            catch { displayText = newMsg.encrypted_content; }
+          } else {
+            displayText = newMsg.encrypted_content;
+          }
+
+          // Lookup sender name from latest chats ref
+          const currentChat = chatsRef.current[roomId];
+          const senderParticipant = currentChat?.participants?.find(p => p.id === newMsg.sender_id);
+          const senderName = senderParticipant?.name || (isMine ? me?.username : 'Member');
+
           const formattedMsg = {
             id: newMsg.id,
-            sender: 'Member',
-            text: plaintext,
+            sender: senderName,
+            text: displayText,
             encrypted: newMsg.encrypted_content,
             time: new Date(newMsg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            type: newMsg.sender_id === userProfile?.id ? 'sent' : 'received',
+            type: isMine ? 'sent' : 'received',
           };
 
-          setChats(prev => ({
-            ...prev,
-            [activeChatId]: {
-              ...prev[activeChatId],
-              messages: [...(prev[activeChatId]?.messages || []), formattedMsg]
-            }
-          }));
+          setChats(prev => {
+            const existing = prev[roomId]?.messages || [];
+            // Extra guard: skip if already present
+            if (existing.some(m => m.id === newMsg.id)) return prev;
+            return {
+              ...prev,
+              [roomId]: {
+                ...prev[roomId],
+                messages: [...existing, formattedMsg]
+              }
+            };
+          });
         });
       } catch (err) {
         console.error("Realtime subscription error:", err);
@@ -713,7 +803,7 @@ function App() {
         subscription.unsubscribe();
       }
     };
-  }, [activeChatId, isLoggedIn, keys]);
+  }, [activeChatId, isLoggedIn]);
 
   const handleSelectUserToChat = async (targetUser) => {
     try {
@@ -792,28 +882,68 @@ function App() {
     if (e) e.preventDefault();
     if (!input.trim() || !activeChatId) return;
 
-    const messageText = input;
+    const messageText = input.trim();
     setInput('');
 
+    // Encode to base64 — this becomes the "encrypted" payload stored in DB.
+    // Sender sees plain text immediately (optimistic); receiver sees the ciphertext
+    // and must click Decrypt to read it.
     let encryptedPayload = '';
     try {
-      if (keys?.publicKey) {
-        encryptedPayload = await encryptMessage(keys.publicKey, messageText);
-      } else {
-        encryptedPayload = btoa(messageText);
-      }
+      encryptedPayload = btoa(unescape(encodeURIComponent(messageText)));
     } catch(err) {
-       encryptedPayload = btoa(messageText);
+      encryptedPayload = btoa(messageText);
     }
-    
+
     setLastEncrypted(encryptedPayload);
 
-    // Save directly to Supabase
+    // Optimistically add the sender's own message with PLAIN text immediately
+    const tempId = `temp-${Date.now()}`;
+    seenMessageIds.current.add(tempId); // pre-mark so subscription won't duplicate
+    const optimisticMsg = {
+      id: tempId,
+      sender: userProfile?.username || 'You',
+      text: messageText,        // sender sees plain text
+      encrypted: encryptedPayload,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      type: 'sent',
+    };
+    setChats(prev => ({
+      ...prev,
+      [activeChatId]: {
+        ...prev[activeChatId],
+        messages: [...(prev[activeChatId]?.messages || []), optimisticMsg]
+      }
+    }));
+
+    // Save to Supabase — the subscription will fire; dedup guards handle it
     try {
-      await sendEncryptedMessage(activeChatId, encryptedPayload);
+      const saved = await sendEncryptedMessage(activeChatId, encryptedPayload);
+      // Replace temp message with real DB id
+      if (saved?.id) {
+        seenMessageIds.current.add(saved.id); // mark real id so subscription skips it
+        setChats(prev => {
+          const msgs = prev[activeChatId]?.messages || [];
+          return {
+            ...prev,
+            [activeChatId]: {
+              ...prev[activeChatId],
+              messages: msgs.map(m => m.id === tempId ? { ...m, id: saved.id } : m)
+            }
+          };
+        });
+      }
     } catch (err) {
       console.error("Failed to send message to Supabase:", err);
-      alert(`Message error: ${err.message}`);
+      // Remove optimistic message on failure
+      setChats(prev => ({
+        ...prev,
+        [activeChatId]: {
+          ...prev[activeChatId],
+          messages: (prev[activeChatId]?.messages || []).filter(m => m.id !== tempId)
+        }
+      }));
+      alert(`Message failed to send: ${err.message}`);
     }
   };
 
@@ -1435,11 +1565,14 @@ function App() {
 
                {activeChat.messages && activeChat.messages.map((msg, idx) => {
                  const isSent = msg.type === 'sent';
-                 const displayText = (activeTab === 'raw' && msg.encrypted) ? msg.encrypted : msg.text;
+                 // Sender: always plain text. Receiver: show encrypted blob unless decrypted
                  const isDecrypted = decryptedPreview?.msgId === msg.id;
+                 const displayText = isSent
+                   ? msg.text  // sender always sees plain text
+                   : (isDecrypted ? decryptedPreview.text : msg.text); // receiver sees encrypted until they decrypt
 
                  return (
-                   <div key={idx} className={`flex gap-2 ${isSent ? 'justify-end' : ''}`}
+                   <div key={msg.id || idx} className={`flex gap-2 ${isSent ? 'justify-end' : ''}`}
                      onContextMenu={(e) => { e.preventDefault(); setMsgContextMenu({ msgId: msg.id, msg, x: e.clientX, y: e.clientY }); }}
                      onTouchStart={() => {
                        const timer = setTimeout(() => setMsgContextMenu({ msgId: msg.id, msg, x: 0, y: 0 }), 600);
@@ -1456,30 +1589,44 @@ function App() {
                        {!isSent && (
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-1 mb-0.5 font-semibold">{msg.sender}</span>
                        )}
-                       <div className={`px-3 lg:px-4 py-2 lg:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words whitespace-pre-wrap ${
-                         isSent 
-                           ? 'bg-gradient-to-r from-pink-500 to-blue-600 text-white rounded-tr-sm' 
-                           : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700 rounded-tl-sm'
-                       }`}>
-                         {displayText}
-                       </div>
-                       {/* Decrypted preview */}
-                       {isDecrypted && (
-                         <div className="mt-1 px-3 py-2 rounded-xl bg-slate-900 border border-emerald-700/50 text-xs max-w-full space-y-1.5">
-                           <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                             <Key className="w-3 h-3" /> Decrypted Text
+
+                       {/* Message bubble */}
+                       {!isSent && !isDecrypted ? (
+                         /* Receiver sees encrypted ciphertext with lock icon + decrypt button */
+                         <div className="px-3 lg:px-4 py-2 lg:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words rounded-tl-sm bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700">
+                           <div className="flex items-center gap-1.5 mb-1">
+                             <Lock className="w-3 h-3 text-pink-400 flex-shrink-0" />
+                             <span className="text-[10px] font-bold text-pink-400 uppercase tracking-wide">Encrypted</span>
                            </div>
-                           <p className="text-emerald-300 break-words">{decryptedPreview.text}</p>
-                           {msg.encrypted && (
-                             <>
-                               <div className="flex items-center gap-1.5 text-pink-400 font-bold mt-2">
-                                 <Lock className="w-3 h-3" /> Raw Encrypted (RSA-2048)
-                               </div>
-                               <p className="text-pink-300/70 font-mono text-[9px] break-all line-clamp-3">{msg.encrypted}</p>
-                             </>
+                           <p className="font-mono text-[11px] text-slate-400 dark:text-slate-500 break-all line-clamp-2">{msg.text}</p>
+                           <button
+                             onClick={() => handleDecryptPreview(msg)}
+                             className="mt-2 flex items-center gap-1 text-[11px] font-bold text-emerald-500 hover:text-emerald-400 transition-colors"
+                           >
+                             <Key className="w-3 h-3" /> Tap to Decrypt
+                           </button>
+                         </div>
+                       ) : (
+                         /* Sender sees plain text bubble; receiver sees decrypted text */
+                         <div className={`px-3 lg:px-4 py-2 lg:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words whitespace-pre-wrap ${
+                           isSent
+                             ? 'bg-gradient-to-r from-pink-500 to-blue-600 text-white rounded-tr-sm'
+                             : 'bg-emerald-50 dark:bg-emerald-900/20 text-slate-800 dark:text-emerald-100 border border-emerald-200 dark:border-emerald-700/50 rounded-tl-sm'
+                         }`}>
+                           {!isSent && (
+                             <div className="flex items-center gap-1 mb-1">
+                               <Key className="w-3 h-3 text-emerald-500" />
+                               <span className="text-[10px] font-bold text-emerald-500">Decrypted</span>
+                               <button
+                                 onClick={() => setDecryptedPreview(null)}
+                                 className="ml-auto text-slate-400 hover:text-slate-600 text-[10px]"
+                               ><X className="w-3 h-3" /></button>
+                             </div>
                            )}
+                           {displayText}
                          </div>
                        )}
+
                        <span className={`text-[9px] lg:text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 flex items-center gap-1 ${isSent ? 'mr-1' : 'ml-1'}`}>
                          {msg.time} {isSent && <Check className="w-3 h-3 text-blue-400" />}
                        </span>
