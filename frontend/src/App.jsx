@@ -1324,6 +1324,8 @@ function App() {
     </div>
   );
 
+  const activeChat = activeChatId ? (chats[activeChatId] || { id: activeChatId, name: 'Direct Chat', type: 'direct', participants: [], messages: [] }) : null;
+
   return (
     <div className="flex h-screen max-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors fixed inset-0 w-full">
       {/* Settings Page Overlay */}
@@ -2035,15 +2037,15 @@ function App() {
           </div>
         ) : (
           <div className="hidden lg:flex flex-1 flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-slate-950">
-            <div className="w-16 h-16 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-blue-500 shadow-md mb-4">
-              <Lock className="w-8 h-8" />
+            <div className="w-16 h-16 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center text-pink-500 shadow-md mb-4">
+              <User className="w-8 h-8" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 dark:text-white">No Active Channel</h3>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-white">No Conversation Selected</h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mb-4">
-              Create or select a room from the menu to start exchanging encrypted messages.
+              Select a conversation from the sidebar or search @username to start exchanging end-to-end encrypted messages.
             </p>
-            <button onClick={() => setIsNewRoomModalOpen(true)} className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-md hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5">
-              <Plus className="w-4 h-4" /> Create Encrypted Channel
+            <button onClick={() => setIsSearchOpen(true)} className="px-4 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-blue-500 text-white font-bold text-xs shadow-md hover:opacity-90 transition-all inline-flex items-center gap-1.5 active:scale-95">
+              <UserPlus className="w-4 h-4" /> Start Direct Message
             </button>
           </div>
         )}
