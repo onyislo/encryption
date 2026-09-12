@@ -82,6 +82,8 @@ function App() {
   const localStreamRef = useRef(null);
   const ringtoneRef = useRef(null);
   const outboundRingRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const currentCallRoomIdRef = useRef(null);
 
   const getChatDisplayName = (chat) => {
     if (!chat) return '';
@@ -204,25 +206,57 @@ function App() {
     }
   };
 
+  // ── Media Stream Helper (with fallbacks for mobile & permissions) ──
+  const getMediaStream = async (type) => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Camera/Microphone access requires HTTPS or localhost. Please ensure your connection is secure (HTTPS).');
+    }
+
+    if (type === 'video') {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+      } catch (err1) {
+        try {
+          return await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        } catch (err2) {
+          console.warn('Video camera access failed, falling back to voice call:', err2);
+          alert('Camera access failed or was rejected. Falling back to voice call.');
+          setCallType('voice');
+          return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        }
+      }
+    } else {
+      return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
+  };
+
   // ── Peer Connection ────────────────────────────────────────────
   const createPeerConnection = () => {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
       ]
     });
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(t => pc.addTrack(t, localStreamRef.current));
     }
     pc.ontrack = (e) => {
-      if (remoteVideoRef.current && e.streams[0]) {
-        remoteVideoRef.current.srcObject = e.streams[0];
+      if (e.streams && e.streams[0]) {
+        remoteStreamRef.current = e.streams[0];
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = e.streams[0];
+        }
       }
     };
     pc.onicecandidate = async (e) => {
-      if (e.candidate && activeChatId) {
-        await sendEncryptedMessage(activeChatId, JSON.stringify({
+      const targetRoom = currentCallRoomIdRef.current || activeChatId;
+      if (e.candidate && targetRoom) {
+        await sendEncryptedMessage(targetRoom, JSON.stringify({
           type: 'ice-candidate', candidate: e.candidate, from: userProfile?.username
         })).catch(() => {});
       }
@@ -236,17 +270,33 @@ function App() {
     return pc;
   };
 
+  // Attach video streams to video DOM elements when overlay renders
+  useEffect(() => {
+    if (isInCall) {
+      if (localVideoRef.current && localStreamRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+      if (remoteVideoRef.current && remoteStreamRef.current) {
+        remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      }
+    }
+  }, [isInCall, callType, callStatus]);
+
   // ── Start Call ─────────────────────────────────────────────────
   const startCall = async (type) => {
+    if (!activeChatId) {
+      alert('Please select a chat before starting a call.');
+      return;
+    }
     try {
+      currentCallRoomIdRef.current = activeChatId;
       setCallType(type);
       setCallStatus('calling');
       setIsInCall(true);
       playRingtone('outgoing');
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+      const stream = await getMediaStream(type);
       localStreamRef.current = stream;
-      if (localVideoRef.current && type === 'video') localVideoRef.current.srcObject = stream;
 
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
@@ -260,7 +310,7 @@ function App() {
       setIsInCall(false);
       setCallStatus('idle');
       stopRingtone();
-      alert('Could not access camera/microphone. Please check permissions.');
+      alert(err.message || 'Could not access camera/microphone. Please check permissions.');
     }
   };
 
@@ -269,8 +319,9 @@ function App() {
     stopRingtone();
     localStreamRef.current?.getTracks().forEach(t => t.stop());
     peerConnectionRef.current?.close();
-    if (notify && activeChatId) {
-      await sendEncryptedMessage(activeChatId, JSON.stringify({
+    const targetRoom = currentCallRoomIdRef.current || activeChatId;
+    if (notify && targetRoom) {
+      await sendEncryptedMessage(targetRoom, JSON.stringify({
         type: 'call-end', from: userProfile?.username
       })).catch(() => {});
     }
@@ -281,22 +332,25 @@ function App() {
     setIsMuted(false);
     setIsVideoOff(false);
     localStreamRef.current = null;
+    remoteStreamRef.current = null;
     peerConnectionRef.current = null;
+    currentCallRoomIdRef.current = null;
   };
 
   // ── Answer Call ────────────────────────────────────────────────
   const answerCall = async () => {
     if (!incomingCall) return;
     stopRingtone();
+    const targetRoom = incomingCall.roomId || activeChatId;
+    currentCallRoomIdRef.current = targetRoom;
+    const requestedType = incomingCall.callType || 'voice';
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true, video: incomingCall.callType === 'video'
-      });
+      const stream = await getMediaStream(requestedType);
       localStreamRef.current = stream;
-      if (localVideoRef.current && incomingCall.callType === 'video') localVideoRef.current.srcObject = stream;
 
       setIsInCall(true);
-      setCallType(incomingCall.callType);
+      setCallType(requestedType);
       setCallStatus('connected');
       setIncomingCall(null);
 
@@ -306,20 +360,21 @@ function App() {
         await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await sendEncryptedMessage(activeChatId, JSON.stringify({
+        await sendEncryptedMessage(targetRoom, JSON.stringify({
           type: 'call-answer', answer, from: userProfile?.username
         }));
       }
     } catch (err) {
-      alert('Could not access camera/microphone.');
+      alert(err.message || 'Could not access camera/microphone.');
     }
   };
 
   // ── Decline Call ───────────────────────────────────────────────
   const declineCall = async () => {
     stopRingtone();
-    if (activeChatId) {
-      await sendEncryptedMessage(activeChatId, JSON.stringify({
+    const targetRoom = incomingCall?.roomId || activeChatId;
+    if (targetRoom) {
+      await sendEncryptedMessage(targetRoom, JSON.stringify({
         type: 'call-decline', from: userProfile?.username
       })).catch(() => {});
     }
