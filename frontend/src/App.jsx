@@ -19,6 +19,7 @@ import {
   startDirectMessage,
   subscribeToPresence,
   sendEncryptedMessage, 
+  sendCallSignal,
   fetchRoomMessages, 
   subscribeToMessages,
   searchProfiles,
@@ -84,7 +85,9 @@ function App() {
   const ringtoneRef = useRef(null);
   const outboundRingRef = useRef(null);
   const remoteStreamRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const currentCallRoomIdRef = useRef(null);
+  const iceCandidatesBufferRef = useRef([]);
 
   // ── Call History Logging ─────────────────────────────────────
   const [activeNavTab, setActiveNavTab] = useState('chats'); // 'chats' | 'calls'
@@ -276,7 +279,7 @@ function App() {
     }
   };
 
-  // Callback refs to immediately attach streams to DOM video elements when rendered
+  // Callback refs to immediately attach streams to DOM video/audio elements when rendered
   const attachLocalVideoRef = (el) => {
     localVideoRef.current = el;
     if (el && localStreamRef.current) {
@@ -294,6 +297,25 @@ function App() {
         el.srcObject = remoteStreamRef.current;
       }
       el.play().catch(() => {});
+    }
+  };
+
+  const attachRemoteAudioRef = (el) => {
+    remoteAudioRef.current = el;
+    if (el && remoteStreamRef.current) {
+      if (el.srcObject !== remoteStreamRef.current) {
+        el.srcObject = remoteStreamRef.current;
+      }
+      el.play().catch(() => {});
+    }
+  };
+
+  const processBufferedIceCandidates = async () => {
+    if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+      while (iceCandidatesBufferRef.current.length > 0) {
+        const candidate = iceCandidatesBufferRef.current.shift();
+        await peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+      }
     }
   };
 
@@ -316,14 +338,18 @@ function App() {
           remoteVideoRef.current.srcObject = e.streams[0];
           remoteVideoRef.current.play().catch(() => {});
         }
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = e.streams[0];
+          remoteAudioRef.current.play().catch(() => {});
+        }
       }
     };
     pc.onicecandidate = async (e) => {
       const targetRoom = currentCallRoomIdRef.current || activeChatId;
       if (e.candidate && targetRoom) {
-        await sendEncryptedMessage(targetRoom, JSON.stringify({
+        await sendCallSignal(targetRoom, {
           type: 'ice-candidate', candidate: e.candidate, from: userProfile?.username
-        })).catch(() => {});
+        }).catch(() => {});
       }
     };
     pc.onconnectionstatechange = () => {
@@ -336,7 +362,7 @@ function App() {
     return pc;
   };
 
-  // Attach video streams to video DOM elements when overlay renders
+  // Attach video and audio streams to DOM elements when overlay renders
   useEffect(() => {
     if (isInCall) {
       if (localVideoRef.current && localStreamRef.current) {
@@ -346,6 +372,10 @@ function App() {
       if (remoteVideoRef.current && remoteStreamRef.current) {
         remoteVideoRef.current.srcObject = remoteStreamRef.current;
         remoteVideoRef.current.play().catch(() => {});
+      }
+      if (remoteAudioRef.current && remoteStreamRef.current) {
+        remoteAudioRef.current.srcObject = remoteStreamRef.current;
+        remoteAudioRef.current.play().catch(() => {});
       }
     }
   }, [isInCall, callType, callStatus]);
@@ -413,9 +443,9 @@ function App() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      await sendEncryptedMessage(activeChatId, JSON.stringify({
+      await sendCallSignal(activeChatId, {
         type: 'call-start', callType: type, offer, from: userProfile?.username
-      }));
+      });
     } catch (err) {
       setIsInCall(false);
       setCallStatus('idle');
@@ -431,9 +461,9 @@ function App() {
     peerConnectionRef.current?.close();
     const targetRoom = currentCallRoomIdRef.current || activeChatId;
     if (notify && targetRoom) {
-      await sendEncryptedMessage(targetRoom, JSON.stringify({
+      await sendCallSignal(targetRoom, {
         type: 'call-end', from: userProfile?.username
-      })).catch(() => {});
+      }).catch(() => {});
     }
 
     if (activeCallLogRef.current) {
@@ -480,6 +510,7 @@ function App() {
     remoteStreamRef.current = null;
     peerConnectionRef.current = null;
     currentCallRoomIdRef.current = null;
+    iceCandidatesBufferRef.current = [];
   };
 
   // ── Answer Call ────────────────────────────────────────────────
@@ -492,6 +523,13 @@ function App() {
 
     if (activeCallLogRef.current) {
       activeCallLogRef.current.direction = 'incoming';
+    } else {
+      activeCallLogRef.current = {
+        peerName: incomingCall.from ? (incomingCall.from.startsWith('@') ? incomingCall.from : `@${incomingCall.from}`) : 'User',
+        chatId: targetRoom,
+        callType: requestedType,
+        direction: 'incoming',
+      };
     }
 
     try {
@@ -512,11 +550,12 @@ function App() {
       peerConnectionRef.current = pc;
       if (incomingCall.offer) {
         await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
+        await processBufferedIceCandidates();
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await sendEncryptedMessage(targetRoom, JSON.stringify({
+        await sendCallSignal(targetRoom, {
           type: 'call-answer', answer, from: userProfile?.username
-        }));
+        });
       }
     } catch (err) {
       alert(err.message || 'Could not access camera/microphone.');
@@ -528,9 +567,9 @@ function App() {
     stopRingtone();
     const targetRoom = incomingCall?.roomId || activeChatId;
     if (targetRoom) {
-      await sendEncryptedMessage(targetRoom, JSON.stringify({
+      await sendCallSignal(targetRoom, {
         type: 'call-decline', from: userProfile?.username
-      })).catch(() => {});
+      }).catch(() => {});
     }
     if (activeCallLogRef.current) {
       addCallLog({
@@ -629,7 +668,9 @@ function App() {
           } else if (parsed.content) {
             text = parsed.content;
           } else if (parsed.type) {
-            if (parsed.type.startsWith('call-')) {
+            if (parsed.type === 'ice-candidate') {
+              text = '📡 Call Signal';
+            } else if (parsed.type.startsWith('call-')) {
               text = `📞 Call signal (${parsed.type.replace('call-', '')})`;
             } else {
               text = parsed.type;
@@ -970,6 +1011,11 @@ function App() {
             const parsed = JSON.parse(plaintext);
             if (parsed && parsed.type && CALL_TYPES.includes(parsed.type)) {
               if (parsed.type === 'call-start') {
+                const myUser = userProfile?.username?.toLowerCase().replace(/^@/, '');
+                const senderUser = parsed.from?.toLowerCase().replace(/^@/, '');
+                if (myUser && senderUser && myUser === senderUser) {
+                  return; // Caller ignoring own broadcast call-start signal
+                }
                 playRingtone('incoming');
                 activeCallLogRef.current = {
                   peerName: parsed.from ? (parsed.from.startsWith('@') ? parsed.from : `@${parsed.from}`) : 'User',
@@ -986,6 +1032,7 @@ function App() {
                 setCallStatus('connected');
                 if (peerConnectionRef.current && parsed.answer) {
                   await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(parsed.answer)).catch(console.error);
+                  await processBufferedIceCandidates();
                 }
               } else if (parsed.type === 'call-decline') {
                 stopRingtone();
@@ -994,8 +1041,13 @@ function App() {
               } else if (parsed.type === 'call-end') {
                 endCall(false);
               } else if (parsed.type === 'ice-candidate') {
-                if (peerConnectionRef.current && parsed.candidate) {
-                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(parsed.candidate)).catch(() => {});
+                if (parsed.candidate) {
+                  const candidate = new RTCIceCandidate(parsed.candidate);
+                  if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+                    await peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+                  } else {
+                    iceCandidatesBufferRef.current.push(candidate);
+                  }
                 }
               }
               return;
@@ -1046,27 +1098,44 @@ function App() {
       try {
         const history = await fetchRoomMessages(activeChatId);
         if (history) {
-          const loadedMsgs = history.map(m => {
+          const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+          const loadedMsgs = [];
+
+          for (const m of history) {
             seenMessageIds.current.add(m.id);
             const isMine = m.sender_id === userProfileRef.current?.id;
-            let displayText;
-            if (isMine) {
-              // Sender sees plain text (decoded from base64)
-              try { displayText = decodeURIComponent(escape(atob(m.encrypted_content))); }
-              catch { displayText = m.encrypted_content; }
-            } else {
-              // Receiver sees encrypted ciphertext payload (they must click Decrypt to view)
-              displayText = m.encrypted_content;
+            let displayText = m.encrypted_content;
+            let isCallSignal = false;
+
+            try {
+              const decoded = decodeURIComponent(escape(atob(m.encrypted_content)));
+              const parsed = JSON.parse(decoded);
+              if (parsed && parsed.type && CALL_TYPES.includes(parsed.type)) {
+                isCallSignal = true;
+              }
+              if (isMine && !isCallSignal) {
+                displayText = decoded;
+              }
+            } catch (e) {
+              if (isMine) {
+                try { displayText = decodeURIComponent(escape(atob(m.encrypted_content))); }
+                catch { displayText = m.encrypted_content; }
+              }
             }
-            return {
+
+            if (isCallSignal) {
+              continue; // Filter out raw WebRTC signal messages from chat timeline!
+            }
+
+            loadedMsgs.push({
               id: m.id,
               sender: m.sender?.username || 'User',
               text: displayText,
               encrypted: m.encrypted_content,
               time: new Date(m.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               type: isMine ? 'sent' : 'received',
-            };
-          });
+            });
+          }
 
           setChats(prev => ({
             ...prev,
@@ -2271,6 +2340,7 @@ function App() {
       {/* ── ACTIVE CALL OVERLAY (WhatsApp-like) ── */}
       {isInCall && (
         <div className="fixed inset-0 z-[200] flex flex-col bg-slate-900">
+          <audio ref={attachRemoteAudioRef} autoPlay playsInline />
           {/* Video area */}
           {callType === 'video' ? (
             <div className="flex-1 relative bg-black">
@@ -2352,8 +2422,8 @@ function App() {
       )}
 
       {/* ── INCOMING CALL (WhatsApp-like) ── */}
-      {incomingCall && !isInCall && (
-        <div className="fixed inset-0 z-[250] flex flex-col items-center justify-between bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-8">
+      {incomingCall && (
+        <div className="fixed inset-0 z-[300] flex flex-col items-center justify-between bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-8">
           <div className="flex-1 flex flex-col items-center justify-center text-center">
             <p className="text-white/60 text-sm mb-4 tracking-widest uppercase">
               Incoming {incomingCall.callType === 'video' ? 'Video' : 'Voice'} Call

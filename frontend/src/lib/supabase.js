@@ -244,6 +244,29 @@ export async function sendEncryptedMessage(roomId, encryptedPayload) {
   return data;
 }
 
+export async function sendCallSignal(roomId, signalObj) {
+  const payloadStr = typeof signalObj === 'string' ? signalObj : JSON.stringify(signalObj);
+  let base64Payload = '';
+  try {
+    base64Payload = btoa(unescape(encodeURIComponent(payloadStr)));
+  } catch {
+    base64Payload = btoa(payloadStr);
+  }
+
+  // Broadcast call signal ephemerally over WebSockets without persisting to database table
+  const channel = supabase.channel('global-chat-and-calls-channel');
+  await channel.send({
+    type: 'broadcast',
+    event: 'call-signal',
+    payload: {
+      id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      room_id: roomId,
+      encrypted_content: base64Payload,
+      created_at: new Date().toISOString(),
+    }
+  }).catch(console.error);
+}
+
 export async function fetchRoomMessages(roomId, limit = 50) {
   const { data, error } = await supabase
     .from('messages')
