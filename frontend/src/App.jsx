@@ -259,7 +259,7 @@ function App() {
       try {
         return await navigator.mediaDevices.getUserMedia({
           audio: true,
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+          video: { facingMode: 'user' }
         });
       } catch (err1) {
         try {
@@ -273,6 +273,27 @@ function App() {
       }
     } else {
       return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
+  };
+
+  // Callback refs to immediately attach streams to DOM video elements when rendered
+  const attachLocalVideoRef = (el) => {
+    localVideoRef.current = el;
+    if (el && localStreamRef.current) {
+      if (el.srcObject !== localStreamRef.current) {
+        el.srcObject = localStreamRef.current;
+      }
+      el.play().catch(() => {});
+    }
+  };
+
+  const attachRemoteVideoRef = (el) => {
+    remoteVideoRef.current = el;
+    if (el && remoteStreamRef.current) {
+      if (el.srcObject !== remoteStreamRef.current) {
+        el.srcObject = remoteStreamRef.current;
+      }
+      el.play().catch(() => {});
     }
   };
 
@@ -293,6 +314,7 @@ function App() {
         remoteStreamRef.current = e.streams[0];
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = e.streams[0];
+          remoteVideoRef.current.play().catch(() => {});
         }
       }
     };
@@ -319,9 +341,11 @@ function App() {
     if (isInCall) {
       if (localVideoRef.current && localStreamRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
+        localVideoRef.current.play().catch(() => {});
       }
       if (remoteVideoRef.current && remoteStreamRef.current) {
         remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        remoteVideoRef.current.play().catch(() => {});
       }
     }
   }, [isInCall, callType, callStatus]);
@@ -379,6 +403,10 @@ function App() {
 
       const stream = await getMediaStream(type);
       localStreamRef.current = stream;
+      if (localVideoRef.current && type === 'video') {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(() => {});
+      }
 
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
@@ -474,6 +502,11 @@ function App() {
       setCallType(requestedType);
       setCallStatus('connected');
       setIncomingCall(null);
+
+      if (localVideoRef.current && requestedType === 'video') {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(() => {});
+      }
 
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
@@ -2241,10 +2274,10 @@ function App() {
           {/* Video area */}
           {callType === 'video' ? (
             <div className="flex-1 relative bg-black">
-              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+              <video ref={attachRemoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
               {/* Local PiP */}
               <div className="absolute top-4 right-4 w-28 h-40 rounded-2xl overflow-hidden border-2 border-white/20 shadow-xl">
-                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover mirror" />
+                <video ref={attachLocalVideoRef} autoPlay playsInline muted className="w-full h-full object-cover mirror" />
               </div>
               {/* Name + status overlay */}
               <div className="absolute top-4 left-4 right-36">
