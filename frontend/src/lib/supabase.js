@@ -61,6 +61,24 @@ export async function signInUser(email, password) {
   return data;
 }
 
+export async function sendPasswordResetEmail(email) {
+  const normalizedEmail = (email || '').trim();
+  if (!normalizedEmail) throw new Error('Enter your email address first.');
+
+  const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+    redirectTo: window.location.origin,
+  });
+  if (error) throw error;
+}
+
+export async function sendDecryptCodeEmail(code) {
+  const { data, error } = await supabase.functions.invoke('send-decrypt-code', {
+    body: { code },
+  });
+  if (error) throw error;
+  return data;
+}
+
 export async function signOutUser() {
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
@@ -72,17 +90,33 @@ export async function getCurrentUser() {
   return user;
 }
 
+export async function getCurrentProfile() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, username, public_key')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function updateProfile(username, publicKeyBase64) {
   const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
 
+  const updates = {
+    username: username,
+    updated_at: new Date().toISOString(),
+  };
+  if (publicKeyBase64 !== undefined) updates.public_key = publicKeyBase64;
+
   const { data, error } = await supabase
     .from('profiles')
-    .update({
-      username: username,
-      public_key: publicKeyBase64,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq('id', user.id)
     .select()
     .single();
@@ -437,6 +471,7 @@ const DEFAULT_SETTINGS = {
   auto_lock: true,
   read_receipts: true,
   message_previews: true,
+  decrypt_code: '',
   language: 'English (US)',
 };
 
@@ -468,7 +503,7 @@ export async function fetchUserSettings() {
 
     const { data, error } = await supabase
       .from('user_settings')
-      .select('dark_mode, notifications, auto_lock, read_receipts, message_previews, language')
+      .select('dark_mode, notifications, auto_lock, read_receipts, message_previews, decrypt_code, language')
       .eq('user_id', user.id)
       .maybeSingle();
 
@@ -499,6 +534,7 @@ export async function saveUserSettings(settings) {
       auto_lock: settings.auto_lock ?? true,
       read_receipts: settings.read_receipts ?? true,
       message_previews: settings.message_previews ?? true,
+      decrypt_code: settings.decrypt_code || '',
       language: settings.language || 'English (US)',
       updated_at: new Date().toISOString(),
     };

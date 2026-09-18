@@ -13,6 +13,7 @@ import {
   signInUser, 
   signOutUser, 
   getCurrentUser, 
+  getCurrentProfile,
   updateProfile, 
   fetchUserRooms, 
   createRoom, 
@@ -26,6 +27,7 @@ import {
   isSupabaseConfigured,
   fetchUserSettings,
   saveUserSettings,
+  sendDecryptCodeEmail,
   updateUserPassword,
   deleteUserAccount,
   leaveRoom,
@@ -69,6 +71,10 @@ function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isChatRoomActive, setIsChatRoomActive] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [decryptCode, setDecryptCode] = useState('');
+  const [decryptPrompt, setDecryptPrompt] = useState(null);
+  const [decryptEntry, setDecryptEntry] = useState('');
+  const [decryptCodeError, setDecryptCodeError] = useState('');
   
   // Call system state
   const [isInCall, setIsInCall] = useState(false);
@@ -652,9 +658,20 @@ function App() {
   // ── Decrypt Message Preview ────────────────────────────────────
   // For received messages: msg.text holds the base64 ciphertext.
   // Decrypting = base64-decoding back to the original plain text.
-  const handleDecryptPreview = async (msg) => {
+  const handleDecryptPreview = async (msg, verified = false) => {
     if (decryptedPreview?.msgId === msg.id) {
       setDecryptedPreview(null);
+      return;
+    }
+    if (!verified) {
+      if (!decryptCode) {
+        setIsSettingsOpen(true);
+        setDecryptCodeError('Create a 4-digit decrypt code in Settings first.');
+        return;
+      }
+      setDecryptEntry('');
+      setDecryptCodeError('');
+      setDecryptPrompt(msg);
       return;
     }
     try {
@@ -798,8 +815,9 @@ function App() {
       try {
         const user = await getCurrentUser();
         if (user) {
-          const username = user.email.split('@')[0];
-          setUserProfile({ id: user.id, email: user.email, username });
+          const profile = await getCurrentProfile().catch(() => null);
+          const username = profile?.username || user.user_metadata?.username || user.email.split('@')[0];
+          setUserProfile({ id: user.id, email: user.email, username, publicKey: profile?.public_key || '' });
           setIsLoggedIn(true);
           try {
             const settings = await fetchUserSettings();
@@ -809,6 +827,9 @@ function App() {
               }
               if (typeof settings.auto_lock === 'boolean') {
                 setAutoLockEnabled(settings.auto_lock);
+              }
+              if (typeof settings.decrypt_code === 'string') {
+                setDecryptCode(settings.decrypt_code);
               }
             }
           } catch (e) {
@@ -1418,22 +1439,22 @@ function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center font-sans relative overflow-hidden">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-pink-500/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
-        <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-80 h-80 bg-blue-500/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
+        <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 w-80 h-80 bg-green-500/15 rounded-full blur-3xl pointer-events-none" />
 
         <div className="relative mb-8">
-          <div className="w-24 h-24 rounded-3xl bg-slate-900/80 border border-slate-800 backdrop-blur-xl flex items-center justify-center shadow-2xl shadow-pink-500/20 relative z-10">
-            <Shield className="w-12 h-12 text-pink-400 animate-pulse" />
+          <div className="w-24 h-24 rounded-3xl bg-emerald-900/80 border border-emerald-700/60 backdrop-blur-xl flex items-center justify-center shadow-2xl shadow-emerald-500/20 relative z-10">
+            <Shield className="w-12 h-12 text-emerald-300 animate-pulse" />
           </div>
-          <div className="absolute -inset-2 bg-gradient-to-tr from-pink-500 to-blue-500 rounded-3xl opacity-30 blur-lg animate-spin" style={{ animationDuration: '6s' }} />
+          <div className="absolute -inset-2 bg-gradient-to-tr from-emerald-400 to-green-500 rounded-3xl opacity-30 blur-lg animate-spin" style={{ animationDuration: '6s' }} />
         </div>
 
-        <h1 className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-pink-400 via-purple-300 to-blue-400 tracking-wide mb-2">
+        <h1 className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-emerald-300 via-green-200 to-emerald-400 tracking-wide mb-2">
           SecureChat RSA-2048
         </h1>
 
         <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900/90 border border-slate-800 shadow-inner">
-          <RefreshCw className="w-3.5 h-3.5 text-pink-400 animate-spin" />
+          <RefreshCw className="w-3.5 h-3.5 text-emerald-300 animate-spin" />
           <span className="text-xs font-semibold text-slate-300 tracking-wide">
             Initializing End-to-End Encrypted Tunnel...
           </span>
@@ -1471,15 +1492,15 @@ function App() {
   }
 
   const renderCallHistoryView = () => (
-    <div className="flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-16 lg:pb-0 h-full">
+    <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 text-slate-800 dark:text-white overflow-hidden pb-16 lg:pb-0 h-full transition-colors">
       {/* Call History Header */}
-      <div className="p-4 border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
+      <div className="p-4 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-500 text-white flex items-center justify-center font-bold text-sm shadow-lg shadow-emerald-500/20">
             <Phone className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-base font-black text-white leading-tight">Call History</h1>
+            <h1 className="text-base font-black text-slate-800 dark:text-white leading-tight">Call History</h1>
             <p className="text-[10px] text-slate-400 font-semibold">
               {callLogs.length} call{callLogs.length !== 1 ? 's' : ''} logged
             </p>
@@ -1490,7 +1511,7 @@ function App() {
             onClick={() => {
               if (window.confirm('Clear all call history logs?')) clearCallLogs();
             }}
-            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950/50 text-slate-400 hover:text-rose-400 text-xs font-bold transition-all border border-slate-700/60 flex items-center gap-1.5"
+            className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-500 dark:text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 text-xs font-bold transition-all border border-slate-200 dark:border-slate-700/60 flex items-center gap-1.5"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Clear</span>
@@ -1501,11 +1522,11 @@ function App() {
       {/* Call Logs List */}
       <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
         {callLogs.length === 0 ? (
-          <div className="py-16 px-4 text-center border border-slate-800/80 rounded-3xl bg-slate-900/40 my-auto">
-            <div className="w-14 h-14 rounded-3xl bg-slate-800/80 border border-slate-700 text-slate-500 flex items-center justify-center mx-auto mb-3 shadow-inner">
+          <div className="py-16 px-4 text-center border border-slate-200 dark:border-slate-800/80 rounded-3xl bg-slate-50 dark:bg-slate-900/40 my-auto">
+            <div className="w-14 h-14 rounded-3xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-slate-500 flex items-center justify-center mx-auto mb-3 shadow-inner">
               <PhoneOff className="w-7 h-7 text-slate-500" />
             </div>
-            <h3 className="text-sm font-bold text-slate-200">No Call History</h3>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">No Call History</h3>
             <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
               Your voice and video calls (incoming, outgoing, and missed) will appear here just like WhatsApp.
             </p>
@@ -1519,7 +1540,7 @@ function App() {
             return (
               <div
                 key={log.id}
-                className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800 hover:bg-slate-800/80 transition-all flex items-center justify-between group"
+                className="p-3 rounded-2xl bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-all flex items-center justify-between group"
               >
                 <div className="flex items-center gap-3 overflow-hidden">
                   <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-pink-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0 shadow-md">
@@ -1527,7 +1548,7 @@ function App() {
                   </div>
 
                   <div className="overflow-hidden">
-                    <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                    <div className="text-xs font-bold text-slate-800 dark:text-white truncate flex items-center gap-1.5">
                       <span className="truncate">{log.peerName}</span>
                       {log.callType === 'video' ? (
                         <Video className="w-3 h-3 text-blue-400 flex-shrink-0" />
@@ -1586,6 +1607,51 @@ function App() {
 
   return (
     <div className="flex h-screen max-h-screen w-full bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors">
+      {decryptPrompt && (
+        <div className="fixed inset-0 bg-black/60 z-[75] flex items-center justify-center p-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (decryptEntry !== decryptCode) {
+                setDecryptCodeError('That code is not correct.');
+                return;
+              }
+              const message = decryptPrompt;
+              setDecryptPrompt(null);
+              setDecryptEntry('');
+              setDecryptCodeError('');
+              handleDecryptPreview(message, true);
+            }}
+            className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-slate-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl"
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <Lock className="w-5 h-5 text-emerald-500" />
+              <h3 className="text-base font-bold text-slate-800 dark:text-white">Unlock Message</h3>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+              Enter your 4-digit decrypt code to view this message.
+            </p>
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]{4}"
+              maxLength={4}
+              autoFocus
+              value={decryptEntry}
+              onChange={(e) => setDecryptEntry(e.target.value.replace(/\D/g, '').slice(0, 4))}
+              className="w-full text-center tracking-[0.6em] text-xl font-bold rounded-xl bg-emerald-50 dark:bg-slate-950 border border-emerald-200 dark:border-slate-700 text-slate-800 dark:text-white py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+              placeholder="••••"
+              required
+            />
+            {decryptCodeError && <p className="mt-2 text-xs text-rose-500">{decryptCodeError}</p>}
+            <div className="flex justify-end gap-2 mt-5">
+              <button type="button" onClick={() => setDecryptPrompt(null)} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Cancel</button>
+              <button type="submit" className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold">Decrypt</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Settings Page Overlay */}
       {isSettingsOpen && (
         <SettingsPage
@@ -1594,6 +1660,8 @@ function App() {
           onClose={() => setIsSettingsOpen(false)}
           onLogout={handleLogout}
           onUpdateProfile={(newProf) => setUserProfile(newProf)}
+          decryptCode={decryptCode}
+          onUpdateDecryptCode={(code) => setDecryptCode(code)}
           isDarkMode={isDarkMode}
           onToggleDarkMode={(val) => setIsDarkMode(val)}
           onToggleAutoLock={(val) => setAutoLockEnabled(val)}
@@ -1783,7 +1851,7 @@ function App() {
       {/* Main Area */}
       <div className="flex-1 flex flex-col bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 relative overflow-hidden">
         {/* Mobile Header */}
-        <div className="lg:hidden h-14 bg-slate-900 border-b border-slate-800 text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
+        <div className="lg:hidden h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-800 dark:text-white flex items-center justify-between px-4 sticky top-0 z-30 shadow-md">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white shadow-md shadow-blue-500/20">
               <Shield className="w-4 h-4" />
@@ -1799,14 +1867,14 @@ function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setIsSearchOpen(true)}
-              className="p-2 rounded-xl bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-colors active:scale-95"
+              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 text-slate-500 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors active:scale-95"
               title="Search"
             >
               <Search className="w-4 h-4" />
             </button>
             <button
               onClick={() => setIsSettingsOpen(true)}
-              className="p-2 rounded-xl bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-colors active:scale-95"
+              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 text-slate-500 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors active:scale-95"
               title="Settings"
             >
               <Settings className="w-4 h-4" />
@@ -1816,22 +1884,22 @@ function App() {
 
         {/* Mobile Dedicated Calls Page */}
         {!isChatRoomActive && activeNavTab === 'calls' && (
-          <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden">
+          <div className="lg:hidden flex-1 flex flex-col bg-white dark:bg-slate-950 text-slate-800 dark:text-white overflow-hidden transition-colors">
             {renderCallHistoryView()}
           </div>
         )}
 
         {/* Mobile Dedicated Chats Page */}
         {!isChatRoomActive && activeNavTab === 'chats' && (
-          <div className="lg:hidden flex-1 flex flex-col bg-slate-950 text-white overflow-hidden pb-16">
+          <div className="lg:hidden flex-1 flex flex-col bg-white dark:bg-slate-950 text-slate-800 dark:text-white overflow-hidden pb-16 transition-colors">
             {/* Header / Current User Bar */}
-            <div className="p-4 border-b border-slate-800/80 flex items-center justify-between sticky top-0 bg-slate-900/90 backdrop-blur-md z-10">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md z-10">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-blue-500 text-white flex items-center justify-center font-bold text-sm shadow-lg shadow-pink-500/20">
                   {userProfile?.username?.substring(0, 2).toUpperCase() || 'ME'}
                 </div>
                 <div>
-                  <h1 className="text-lg font-black text-white leading-tight">Chats</h1>
+                  <h1 className="text-lg font-black text-slate-800 dark:text-white leading-tight">Chats</h1>
                   <div className="text-[10px] text-slate-400 font-semibold flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                     @{userProfile?.username} · Active
@@ -2889,12 +2957,13 @@ function UnconfiguredScreen() {
   );
 }
 
-function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdateProfile, isDarkMode, onToggleDarkMode, onToggleAutoLock, chats, clearCache }) {
+function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdateProfile, decryptCode, onUpdateDecryptCode, isDarkMode, onToggleDarkMode, onToggleAutoLock, chats, clearCache }) {
   const [darkMode, setDarkMode] = useState(isDarkMode ?? false);
   const [notifications, setNotifications] = useState(true);
   const [autoLock, setAutoLock] = useState(true);
   const [readReceipts, setReadReceipts] = useState(true);
   const [messagePreviews, setMessagePreviews] = useState(true);
+  const [editDecryptCode, setEditDecryptCode] = useState(decryptCode || '');
   const [language, setLanguage] = useState('English (US)');
   
   const [showKeyInfo, setShowKeyInfo] = useState(false);
@@ -2960,6 +3029,10 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
           if (typeof settings.message_previews === 'boolean') {
             setMessagePreviews(settings.message_previews);
           }
+          if (typeof settings.decrypt_code === 'string') {
+            setEditDecryptCode(settings.decrypt_code);
+            if (onUpdateDecryptCode) onUpdateDecryptCode(settings.decrypt_code);
+          }
           if (settings.language) {
             setLanguage(settings.language);
           }
@@ -3005,6 +3078,7 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
       auto_lock: key === 'auto_lock' ? newValue : autoLock,
       read_receipts: key === 'read_receipts' ? newValue : readReceipts,
       message_previews: key === 'message_previews' ? newValue : messagePreviews,
+      decrypt_code: editDecryptCode,
       language: language,
     };
     persistSettings(newSettings);
@@ -3016,7 +3090,7 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
     setEditProfileLoading(true);
     setEditProfileError('');
     try {
-      const updated = await updateProfile(editUsername.trim());
+      await updateProfile(editUsername.trim(), publicKeyPem || undefined);
       if (onUpdateProfile) {
         onUpdateProfile({ ...userProfile, username: editUsername.trim() });
       }
@@ -3026,6 +3100,30 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
       setEditProfileError(err.message || 'Failed to update profile.');
     } finally {
       setEditProfileLoading(false);
+    }
+  };
+
+  const handleSaveDecryptCode = async () => {
+    if (!/^\d{4}$/.test(editDecryptCode)) {
+      showToast('Decrypt code must contain exactly 4 digits.');
+      return;
+    }
+    setSavingStatus('saving');
+    if (onUpdateDecryptCode) onUpdateDecryptCode(editDecryptCode);
+    try {
+      await persistSettings({
+        dark_mode: darkMode,
+        notifications,
+        auto_lock: autoLock,
+        read_receipts: readReceipts,
+        message_previews: messagePreviews,
+        decrypt_code: editDecryptCode,
+        language,
+      });
+      await sendDecryptCodeEmail(editDecryptCode);
+      showToast('Decrypt code saved and sent to your email.');
+    } catch (err) {
+      showToast(`Code saved, but email failed: ${err.message || 'deploy the email function'}`);
     }
   };
 
@@ -3071,6 +3169,7 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
       auto_lock: autoLock,
       read_receipts: readReceipts,
       message_previews: messagePreviews,
+      decrypt_code: editDecryptCode,
       language: lang,
     });
     showToast(`Language changed to ${lang}`);
@@ -3264,6 +3363,40 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
             subtitle={language}
             onClick={() => setIsLanguageOpen(true)}
           />
+        </div>
+
+        <SectionLabel>Message Protection</SectionLabel>
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm p-4">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-emerald-50 dark:bg-emerald-950/40 text-emerald-500 border border-emerald-100 dark:border-emerald-900/50">
+              <Lock className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Decrypt Code</div>
+              <div className="text-[11px] text-slate-400 dark:text-slate-500">Required before opening encrypted messages</div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={4}
+              value={editDecryptCode}
+              onChange={(e) => setEditDecryptCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+              placeholder="4 digits"
+              className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-sm text-slate-800 dark:text-white tracking-[0.35em] focus:outline-none focus:border-emerald-500"
+            />
+            <button type="button" onClick={handleSaveDecryptCode} className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold">
+              Save Code
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditDecryptCode(String(Math.floor(1000 + Math.random() * 9000)))}
+            className="mt-2 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
+          >
+            Generate a new 4-digit code
+          </button>
         </div>
 
         {/* Privacy & Security Section */}

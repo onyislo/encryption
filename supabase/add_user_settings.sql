@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS public.user_settings (
 
 -- In case table exists without new columns:
 ALTER TABLE public.user_settings ADD COLUMN IF NOT EXISTS message_previews BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE public.user_settings ADD COLUMN IF NOT EXISTS decrypt_code VARCHAR(4) NOT NULL DEFAULT '';
 ALTER TABLE public.user_settings ADD COLUMN IF NOT EXISTS language VARCHAR(50) NOT NULL DEFAULT 'English (US)';
 
 -- =====================================================================

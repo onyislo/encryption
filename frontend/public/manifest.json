@@ -5,12 +5,18 @@
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#ec4899",
+  "theme_color": "#059669",
   "orientation": "portrait-primary",
   "scope": "/",
   "lang": "en",
   "categories": ["communication", "social"],
   "icons": [
+    {
+      "src": "/securechat-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
     {
       "src": "/icons/icon-72x72.png",
       "sizes": "72x72",

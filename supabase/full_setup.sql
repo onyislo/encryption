@@ -72,6 +72,7 @@ CREATE TABLE public.user_settings (
     auto_lock        BOOLEAN NOT NULL DEFAULT true,
     read_receipts    BOOLEAN NOT NULL DEFAULT true,
     message_previews BOOLEAN NOT NULL DEFAULT true,
+    decrypt_code     VARCHAR(4) NOT NULL DEFAULT '',
     language         VARCHAR(50) NOT NULL DEFAULT 'English (US)',
     updated_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
