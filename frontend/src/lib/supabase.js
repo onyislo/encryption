@@ -253,8 +253,10 @@ export async function sendCallSignal(roomId, signalObj) {
     base64Payload = btoa(payloadStr);
   }
 
-  // Broadcast call signal ephemerally over WebSockets without persisting to database table
-  const channel = supabase.channel('global-chat-and-calls-channel');
+  const channelName = 'global-call-signals';
+  const channel = supabase.channel(channelName);
+
+  await channel.subscribe();
   await channel.send({
     type: 'broadcast',
     event: 'call-signal',
@@ -265,6 +267,12 @@ export async function sendCallSignal(roomId, signalObj) {
       created_at: new Date().toISOString(),
     }
   }).catch(console.error);
+
+  try {
+    await channel.unsubscribe();
+  } catch (error) {
+    console.warn('Call signal channel cleanup failed:', error);
+  }
 }
 
 export async function fetchRoomMessages(roomId, limit = 50) {
@@ -385,9 +393,28 @@ export async function uploadEncryptedAttachment(roomId, encryptedFileBlob, fileN
 }
 
 export async function updateUserPassword(newPassword) {
-  const { data, error } = await supabase.auth.updateUser({ password: newPassword });
-  if (error) throw error;
-  return data;
+  const password = (newPassword || '').trim();
+  if (!password) {
+    throw new Error('A new password is required.');
+  }
+  if (password.length < 6) {
+    throw new Error('Password must be at least 6 characters long.');
+  }
+
+  try {
+    const { data, error } = await supabase.auth.updateUser({ password });
+    if (error) {
+      const msg = (error.message || '').toLowerCase();
+      if (msg.includes('reauth') || msg.includes('re-auth') || msg.includes('login')) {
+        throw new Error('Please sign out and sign back in, then try changing your password again.');
+      }
+      throw new Error(error.message || 'Failed to update password.');
+    }
+    return data;
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    throw new Error('Password update failed.');
+  }
 }
 
 export async function deleteUserAccount() {

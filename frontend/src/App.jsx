@@ -68,6 +68,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isChatRoomActive, setIsChatRoomActive] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState({});
   
   // Call system state
   const [isInCall, setIsInCall] = useState(false);
@@ -88,6 +89,7 @@ function App() {
   const remoteAudioRef = useRef(null);
   const currentCallRoomIdRef = useRef(null);
   const iceCandidatesBufferRef = useRef([]);
+  const callSignalChannelRef = useRef(null);
 
   // ── Call History Logging ─────────────────────────────────────
   const [activeNavTab, setActiveNavTab] = useState('chats'); // 'chats' | 'calls'
@@ -148,6 +150,18 @@ function App() {
       return chat.name || 'Direct Message';
     }
     return chat.name || 'Encrypted Channel';
+  };
+
+  const showBrowserNotification = (title, body) => {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (document.visibilityState === 'visible') return;
+    new Notification(title, { body, icon: '/icons/icon-192.png' });
+  };
+
+  const isChatUserOnline = (chat) => {
+    if (!chat || chat.type !== 'direct') return true;
+    const otherParticipant = chat.participants?.find(p => p.id !== userProfile?.id);
+    return !!(otherParticipant && onlineUserIds.includes(otherParticipant.id));
   };
 
   // ── Ringtone helpers ──────────────────────────────────────────
@@ -426,10 +440,13 @@ function App() {
       };
       callStartTimeRef.current = null;
 
+      const targetUserOnline = activeChat && activeChat.type === 'direct' ? isChatUserOnline(activeChat) : true;
       setCallType(type);
-      setCallStatus('calling');
+      setCallStatus(targetUserOnline ? 'ringing' : 'calling');
       setIsInCall(true);
-      playRingtone('outgoing');
+      if (targetUserOnline) {
+        playRingtone('outgoing');
+      }
 
       const stream = await getMediaStream(type);
       localStreamRef.current = stream;
@@ -901,16 +918,110 @@ function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, userProfile]);
 
+  useEffect(() => {
+    if (!activeChatId) return;
+    setUnreadCounts(prev => ({ ...prev, [activeChatId]: 0 }));
+  }, [activeChatId]);
+
   // Keep refs in sync so realtime callbacks always see fresh values
   useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
   useEffect(() => { userProfileRef.current = userProfile; }, [userProfile]);
   useEffect(() => { chatsRef.current = chats; }, [chats]);
   useEffect(() => { keysRef.current = keys; }, [keys]);
 
+  const handleIncomingCallSignal = async (signalPayload) => {
+    if (!signalPayload?.room_id || !signalPayload.encrypted_content) return;
+
+    let plaintext = signalPayload.encrypted_content;
+    try {
+      plaintext = decodeURIComponent(escape(atob(signalPayload.encrypted_content)));
+    } catch {
+      // Keep raw payload if it is already plain JSON text.
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(plaintext);
+    } catch {
+      return;
+    }
+
+    if (!parsed || !parsed.type) return;
+
+    const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
+    if (!CALL_TYPES.includes(parsed.type)) return;
+
+    const targetRoom = signalPayload.room_id;
+    const myUser = userProfile?.username?.toLowerCase().replace(/^@/, '');
+    const senderUser = parsed.from?.toLowerCase().replace(/^@/, '');
+
+    if (parsed.type === 'call-start') {
+      if (myUser && senderUser && myUser === senderUser) return;
+      playRingtone('incoming');
+      activeCallLogRef.current = {
+        peerName: parsed.from ? (parsed.from.startsWith('@') ? parsed.from : `@${parsed.from}`) : 'User',
+        chatId: targetRoom,
+        callType: parsed.callType || 'voice',
+        direction: 'missed',
+      };
+      callStartTimeRef.current = null;
+      setIncomingCall({ roomId: targetRoom, from: parsed.from, callType: parsed.callType, offer: parsed.offer });
+      setActiveChatId(targetRoom);
+      setIsChatRoomActive(true);
+      return;
+    }
+
+    if (parsed.type === 'call-answer') {
+      stopRingtone();
+      setCallStatus('connected');
+      if (peerConnectionRef.current && parsed.answer) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(parsed.answer)).catch(console.error);
+        await processBufferedIceCandidates();
+      }
+      return;
+    }
+
+    if (parsed.type === 'call-decline') {
+      stopRingtone();
+      alert(`${parsed.from} declined the call`);
+      endCall(false);
+      return;
+    }
+
+    if (parsed.type === 'call-end') {
+      endCall(false);
+      return;
+    }
+
+    if (parsed.type === 'ice-candidate' && parsed.candidate) {
+      const candidate = new RTCIceCandidate(parsed.candidate);
+      if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+        await peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+      } else {
+        iceCandidatesBufferRef.current.push(candidate);
+      }
+    }
+  };
+
   // ── Global Real-Time Subscription for Messages & WebRTC Calls ──────────────
   // Subscribes globally to all messages table events so the recipient receives messages & calls in real time
   useEffect(() => {
     if (!isLoggedIn || !userProfile?.id) return;
+
+    const callChannel = supabase
+      .channel('global-call-signals')
+      .on('broadcast', { event: 'call-signal' }, async (payload) => {
+        const signalPayload = payload?.payload;
+        if (!signalPayload) return;
+
+        const currentUser = userProfileRef.current;
+        if (!currentUser || !signalPayload.room_id) return;
+
+        await handleIncomingCallSignal(signalPayload);
+      })
+      .subscribe();
+
+    callSignalChannelRef.current = callChannel;
 
     const channel = supabase
       .channel('global-chat-and-calls-channel')
@@ -1001,55 +1112,25 @@ function App() {
           // Mark message as seen now that participation is confirmed
           seenMessageIds.current.add(newMsg.id);
 
+          const isRoomActive = activeChatIdRef.current === targetRoomId;
+          if (!isRoomActive) {
+            setUnreadCounts(prev => ({
+              ...prev,
+              [targetRoomId]: (prev[targetRoomId] || 0) + 1,
+            }));
+            const senderName = newMsg.sender?.username || 'Someone';
+            showBrowserNotification(`New message from ${senderName}`, 'Open SecureChat to read it.');
+          }
+
           // Decode base64 payload for checking call signals
           let plaintext;
           try { plaintext = decodeURIComponent(escape(atob(newMsg.encrypted_content))); }
           catch { plaintext = newMsg.encrypted_content; }
 
-          const CALL_TYPES = ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'];
           try {
             const parsed = JSON.parse(plaintext);
-            if (parsed && parsed.type && CALL_TYPES.includes(parsed.type)) {
-              if (parsed.type === 'call-start') {
-                const myUser = userProfile?.username?.toLowerCase().replace(/^@/, '');
-                const senderUser = parsed.from?.toLowerCase().replace(/^@/, '');
-                if (myUser && senderUser && myUser === senderUser) {
-                  return; // Caller ignoring own broadcast call-start signal
-                }
-                playRingtone('incoming');
-                activeCallLogRef.current = {
-                  peerName: parsed.from ? (parsed.from.startsWith('@') ? parsed.from : `@${parsed.from}`) : 'User',
-                  chatId: newMsg.room_id,
-                  callType: parsed.callType || 'voice',
-                  direction: 'missed',
-                };
-                callStartTimeRef.current = null;
-                setIncomingCall({ roomId: newMsg.room_id, from: parsed.from, callType: parsed.callType, offer: parsed.offer });
-                setActiveChatId(newMsg.room_id);
-                setIsChatRoomActive(true);
-              } else if (parsed.type === 'call-answer') {
-                stopRingtone();
-                setCallStatus('connected');
-                if (peerConnectionRef.current && parsed.answer) {
-                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(parsed.answer)).catch(console.error);
-                  await processBufferedIceCandidates();
-                }
-              } else if (parsed.type === 'call-decline') {
-                stopRingtone();
-                alert(`${parsed.from} declined the call`);
-                endCall(false);
-              } else if (parsed.type === 'call-end') {
-                endCall(false);
-              } else if (parsed.type === 'ice-candidate') {
-                if (parsed.candidate) {
-                  const candidate = new RTCIceCandidate(parsed.candidate);
-                  if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
-                    await peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
-                  } else {
-                    iceCandidatesBufferRef.current.push(candidate);
-                  }
-                }
-              }
+            if (parsed && parsed.type && ['call-start', 'call-answer', 'call-decline', 'call-end', 'ice-candidate'].includes(parsed.type)) {
+              await handleIncomingCallSignal({ room_id: newMsg.room_id, encrypted_content: newMsg.encrypted_content });
               return;
             }
           } catch (e) {
@@ -1085,7 +1166,10 @@ function App() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      if (callSignalChannelRef.current) {
+        callSignalChannelRef.current.unsubscribe();
+      }
+      channel.unsubscribe();
     };
   }, [isLoggedIn, userProfile?.id]);
 
@@ -1501,7 +1585,7 @@ function App() {
   const activeChat = activeChatId ? (chats[activeChatId] || { id: activeChatId, name: 'Direct Chat', type: 'direct', participants: [], messages: [] }) : null;
 
   return (
-    <div className="flex h-screen max-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors fixed inset-0 w-full">
+    <div className="flex h-screen max-h-screen w-full bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors">
       {/* Settings Page Overlay */}
       {isSettingsOpen && (
         <SettingsPage
@@ -1665,6 +1749,7 @@ function App() {
                         subtitle={statusText}
                         active={activeChatId === chat.id} 
                         isOnline={isUserOnline}
+                        badgeCount={unreadCounts[chat.id] || 0}
                         onClick={() => {
                           setActiveChatId(chat.id);
                           setIsChatRoomActive(true);
@@ -2379,7 +2464,7 @@ function App() {
               <div className="absolute top-4 left-4 right-36">
                 <p className="text-white font-bold text-lg">{getChatDisplayName(activeChat)}</p>
                 <p className="text-white/70 text-xs">
-                  {callStatus === 'calling' ? 'Calling...' : callStatus === 'connected' ? 'Connected' : 'Connecting...'}
+                  {callStatus === 'ringing' ? 'Ringing...' : callStatus === 'calling' ? 'Calling...' : callStatus === 'connected' ? 'Connected' : 'Connecting...'}
                 </p>
               </div>
             </div>
@@ -2397,7 +2482,7 @@ function App() {
               </div>
               <h2 className="text-white text-2xl font-bold mt-6 mb-1">{getChatDisplayName(activeChat)}</h2>
               <p className="text-white/60 text-sm font-medium">
-                {callStatus === 'calling' ? '📞 Calling...' : callStatus === 'connected' ? '🟢 Connected' : 'Connecting...'}
+                {callStatus === 'ringing' ? '📞 Ringing...' : callStatus === 'calling' ? '📞 Calling...' : callStatus === 'connected' ? '🟢 Connected' : 'Connecting...'}
               </p>
             </div>
           )}
@@ -2643,26 +2728,26 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4 relative overflow-hidden font-sans">
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl pointer-events-none"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(34,197,94,0.14),_transparent_25%),linear-gradient(135deg,_#f8fff9_0%,_#ffffff_35%,_#ecfdf5_100%)] text-slate-800 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-green-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
-      <div className="w-full max-w-md bg-slate-800/80 backdrop-blur-xl border border-slate-700/60 rounded-3xl p-8 shadow-2xl relative z-10">
+      <div className="w-full max-w-md bg-white/90 backdrop-blur-xl border border-emerald-200/80 rounded-3xl p-8 shadow-[0_30px_80px_rgba(16,185,129,0.12)] relative z-10">
         <div className="flex flex-col items-center text-center mb-6">
-           <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-pink-500 to-blue-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 mb-4">
+           <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500 to-green-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/30 mb-4">
              <Shield className="w-9 h-9" />
            </div>
-           <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-blue-400">SecureChat Pro</h1>
-           <p className="text-xs text-slate-400 mt-1">End-to-End Encrypted Platform</p>
+           <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-green-500">SecureChat Pro</h1>
+           <p className="text-xs text-slate-500 mt-1">End-to-End Encrypted Platform</p>
         </div>
 
         {/* Tab Selection */}
-        <div className="flex bg-slate-900/80 border border-slate-700 p-1 rounded-2xl mb-6">
+        <div className="flex bg-emerald-50 border border-emerald-200 p-1 rounded-2xl mb-6">
           <button 
             type="button" 
             onClick={() => setIsSignUp(false)}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-              !isSignUp ? 'bg-gradient-to-r from-pink-500 to-blue-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              !isSignUp ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-emerald-500/20' : 'text-slate-500 hover:text-emerald-700'
             }`}
           >
             <User className="w-3.5 h-3.5" /> Sign In
@@ -2671,7 +2756,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
             type="button" 
             onClick={() => setIsSignUp(true)}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-              isSignUp ? 'bg-gradient-to-r from-pink-500 to-blue-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              isSignUp ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-emerald-500/20' : 'text-slate-500 hover:text-emerald-700'
             }`}
           >
             <UserPlus className="w-3.5 h-3.5" /> Create Account
@@ -2703,7 +2788,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
                   placeholder="Choose a username" 
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                  className="w-full bg-slate-900/90 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50" 
+                  className="w-full bg-emerald-50/60 border border-emerald-200 rounded-xl py-3 pl-10 pr-4 text-xs text-slate-800 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40" 
                   required
                 />
               </div>
@@ -2719,7 +2804,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
                 placeholder="user@example.com" 
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                className="w-full bg-slate-900/90 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50" 
+                className="w-full bg-emerald-50/60 border border-emerald-200 rounded-xl py-3 pl-10 pr-4 text-xs text-slate-800 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40" 
                 required
               />
             </div>
@@ -2734,7 +2819,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
                 placeholder="••••••••••••" 
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                className="w-full bg-slate-900/90 border border-slate-700 rounded-xl py-3 pl-10 pr-11 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50" 
+                className="w-full bg-emerald-50/60 border border-emerald-200 rounded-xl py-3 pl-10 pr-11 text-xs text-slate-800 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40" 
                 required
               />
               <button 
@@ -2751,7 +2836,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
           <button 
             type="submit" 
             disabled={authLoading} 
-            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-pink-500 to-blue-500 text-white text-xs font-bold shadow-lg hover:opacity-95 transition-opacity mt-2 flex items-center justify-center gap-2 disabled:opacity-50"
+            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-green-600 text-white text-xs font-bold shadow-lg shadow-emerald-500/20 hover:opacity-95 transition-opacity mt-2 flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {authLoading ? (
               <>
@@ -2766,7 +2851,7 @@ function LoginScreen({ onAuthSubmit, authError, authSuccess, authLoading }) {
 
         <div className="text-center mt-6 text-xs text-slate-400">
           {isSignUp ? 'Already registered?' : "Need a new account?"}{' '}
-          <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="text-pink-400 font-bold hover:underline">
+          <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="text-emerald-600 font-bold hover:underline">
             {isSignUp ? 'Sign In Here' : 'Create Account Here'}
           </button>
         </div>
@@ -2946,18 +3031,23 @@ function SettingsPage({ userProfile, publicKeyPem, onClose, onLogout, onUpdatePr
 
   const handleChangePasswordSubmit = async (e) => {
     e.preventDefault();
-    if (newPassword.length < 6) {
+    const trimmedNewPassword = newPassword.trim();
+    const trimmedConfirmPassword = confirmPassword.trim();
+
+    if (!trimmedNewPassword || trimmedNewPassword.length < 6) {
       setChangePasswordError('Password must be at least 6 characters long.');
       return;
     }
-    if (newPassword !== confirmPassword) {
+    if (trimmedNewPassword !== trimmedConfirmPassword) {
       setChangePasswordError('Passwords do not match.');
       return;
     }
+
     setChangePasswordLoading(true);
     setChangePasswordError('');
+    setChangePasswordSuccess('');
     try {
-      await updateUserPassword(newPassword);
+      await updateUserPassword(trimmedNewPassword);
       setChangePasswordSuccess('Password updated successfully!');
       setTimeout(() => {
         setIsChangePasswordOpen(false);
